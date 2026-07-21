@@ -140,7 +140,7 @@ impl TelemetryFetcher {
     }
 
     pub fn fetch(&mut self) -> Telemetry {
-        let models = fetch_models(&self.config.llama_swap_url).unwrap_or_default();
+        let models = fetch_models(&self.config.llama_swap_url()).unwrap_or_default();
 
         let (system, system_name) = if let Some(beszel) = self.config.beszel.clone() {
             let sys = self.fetch_beszel(&beszel);
@@ -149,7 +149,7 @@ impl TelemetryFetcher {
         } else {
             (
                 self.config
-                    .telemetry_url
+                    .telemetry_url()
                     .as_ref()
                     .and_then(|url| fetch_system_metrics(url).ok()),
                 None,

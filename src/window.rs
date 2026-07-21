@@ -46,15 +46,15 @@ impl PanelWindow {
         conn.create_colormap(ColormapAlloc::NONE, colormap, screen.root, visual_id)?;
 
         // Position calculations
-        let (visible_x, hidden_x, trigger_x) = match config.side {
+        let (visible_x, hidden_x, trigger_x) = match config.side() {
             Side::Right => (
-                (screen_width - config.panel_width) as i32,
+                (screen_width - config.panel_width()) as i32,
                 screen_width as i32,
-                (screen_width - config.trigger_width) as i32,
+                (screen_width - config.trigger_width()) as i32,
             ),
             Side::Left => (
                 0i32,
-                -(config.panel_width as i32),
+                -(config.panel_width() as i32),
                 0i32,
             ),
         };
@@ -67,7 +67,7 @@ impl PanelWindow {
             screen.root,
             hidden_x as i16,
             0,
-            config.panel_width,
+            config.panel_width(),
             screen_height,
             0,
             WindowClass::INPUT_OUTPUT,
@@ -88,7 +88,7 @@ impl PanelWindow {
             screen.root,
             trigger_x as i16,
             0,
-            config.trigger_width,
+            config.trigger_width(),
             screen_height,
             0,
             WindowClass::INPUT_ONLY,
@@ -115,8 +115,8 @@ impl PanelWindow {
             trigger_win,
             gc,
             depth,
-            panel_width: config.panel_width,
-            side: config.side,
+            panel_width: config.panel_width(),
+            side: config.side(),
             visible_x,
             hidden_x,
         })

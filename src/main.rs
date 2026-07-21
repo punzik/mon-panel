@@ -34,12 +34,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = config::load_config(&config_path);
 
     let panel = window::PanelWindow::create(&config)?;
-    let renderer = render::Renderer::new(config.panel_width, panel.screen_height, &config);
+    let renderer = render::Renderer::new(config.panel_width(), panel.screen_height, &config);
 
     // Telemetry thread
     let (tx, rx) = mpsc::channel::<Telemetry>();
     let tel_config = config.clone();
-    let refresh_ms = tel_config.refresh_interval_ms;
+    let refresh_ms = tel_config.refresh_interval_ms();
     std::thread::spawn(move || {
         let mut fetcher = telemetry::TelemetryFetcher::new(tel_config);
         loop {
@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         animation = Some(SlideAnimation::new(
                             panel.hidden_x as f64,
                             panel.visible_x as f64,
-                            config.animation_duration_ms,
+                            config.animation_duration_ms(),
                         ));
                         panel.raise_panel()?;
                         needs_redraw = true;
@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         animation = Some(SlideAnimation::new(
                             panel.visible_x as f64,
                             panel.hidden_x as f64,
-                            config.animation_duration_ms,
+                            config.animation_duration_ms(),
                         ));
                     }
                 }

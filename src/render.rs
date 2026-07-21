@@ -27,7 +27,7 @@ impl Renderer {
         Self {
             width: width as i32,
             height: height as i32,
-            font_family: config.font_family.clone(),
+            font_family: config.font_family().to_string(),
             config: config.clone(),
         }
     }
@@ -40,7 +40,7 @@ impl Renderer {
             let cr = Context::new(&surface).expect("context");
 
             // Background
-            let bg = &self.config.bg_color;
+            let bg = self.config.bg_color();
             cr.set_operator(cairo::Operator::Source);
             cr.set_source_rgba(bg.r, bg.g, bg.b, bg.a);
             cr.paint().expect("paint");
@@ -50,7 +50,7 @@ impl Renderer {
 
             // Title
             let title = telemetry.system_name.as_deref().unwrap_or("LLM Edge Panel");
-            y = self.draw_text(&cr, title, PADDING, y, TITLE_SIZE, true, &self.config.fg_color);
+            y = self.draw_text(&cr, title, PADDING, y, TITLE_SIZE, true, self.config.fg_color());
             y += 6.0;
 
             // Separator
@@ -69,21 +69,21 @@ impl Renderer {
             // System
             if let Some(sys) = &telemetry.system {
                 y = self.draw_section(&cr, "SYSTEM", y);
-                y = self.draw_bar(&cr, "CPU", sys.cpu_percent as f64, 100.0, "%", y, &self.config.accent_color);
+                y = self.draw_bar(&cr, "CPU", sys.cpu_percent as f64, 100.0, "%", y, self.config.accent_color());
                 let mem_pct = if sys.memory_total_gb > 0.0 {
                     sys.memory_used_gb / sys.memory_total_gb * 100.0
                 } else {
                     0.0
                 };
-                y = self.draw_bar(&cr, "RAM", mem_pct, 100.0, "%", y, &self.config.accent_color);
+                y = self.draw_bar(&cr, "RAM", mem_pct, 100.0, "%", y, self.config.accent_color());
                 if sys.disk_pct > 0.0 {
-                    y = self.draw_bar(&cr, "Disk", sys.disk_pct, 100.0, "%", y, &self.config.accent_color);
+                    y = self.draw_bar(&cr, "Disk", sys.disk_pct, 100.0, "%", y, self.config.accent_color());
                 }
                 if sys.swap_pct > 0.0 {
-                    y = self.draw_bar(&cr, "Swap", sys.swap_pct, 100.0, "%", y, &self.config.accent_color);
+                    y = self.draw_bar(&cr, "Swap", sys.swap_pct, 100.0, "%", y, self.config.accent_color());
                 }
                 if sys.load_avg > 0.0 {
-                    y = self.draw_text(&cr, &format!("Load  {:.2}", sys.load_avg), PADDING, y, BODY_SIZE, false, &self.config.fg_color);
+                    y = self.draw_text(&cr, &format!("Load  {:.2}", sys.load_avg), PADDING, y, BODY_SIZE, false, self.config.fg_color());
                 }
                 y += SECTION_GAP;
             }
@@ -92,7 +92,7 @@ impl Renderer {
             if let Some(sys) = &telemetry.system {
                 if sys.gpu_percent > 0.0 || sys.gpu_temp_c > 0.0 || sys.gpu_memory_total_gb > 0.0 {
                     y = self.draw_section(&cr, "GPU", y);
-                    y = self.draw_bar(&cr, "Util", sys.gpu_percent as f64, 100.0, "%", y, &self.config.accent_color);
+                    y = self.draw_bar(&cr, "Util", sys.gpu_percent as f64, 100.0, "%", y, self.config.accent_color());
 
                     let vram_pct = if sys.gpu_memory_total_gb > 0.0 {
                         sys.gpu_memory_used_gb / sys.gpu_memory_total_gb * 100.0
@@ -100,12 +100,12 @@ impl Renderer {
                         0.0
                     };
                     let vram_val = format!("{:.1}/{:.0}G", sys.gpu_memory_used_gb, sys.gpu_memory_total_gb);
-                    y = self.draw_bar(&cr, "VRAM", vram_pct, 100.0, &vram_val, y, &self.config.accent_color);
+                    y = self.draw_bar(&cr, "VRAM", vram_pct, 100.0, &vram_val, y, self.config.accent_color());
 
                     let temp_color = if sys.gpu_temp_c > 80.0 {
-                        &self.config.warn_color
+                        self.config.warn_color()
                     } else {
-                        &self.config.fg_color
+                        self.config.fg_color()
                     };
                     y = self.draw_text(&cr, &format!("Temp  {:.0}°C", sys.gpu_temp_c), PADDING, y, BODY_SIZE, false, temp_color);
                 }
@@ -113,7 +113,7 @@ impl Renderer {
 
             // No data
             if telemetry.models.is_empty() && telemetry.system.is_none() {
-                self.draw_text(&cr, "Waiting for data...", PADDING, y, BODY_SIZE, false, &self.config.dim_color);
+                self.draw_text(&cr, "Waiting for data...", PADDING, y, BODY_SIZE, false, self.config.dim_color());
             }
         }
 
@@ -137,7 +137,7 @@ impl Renderer {
         y: f64,
         font_size: i32,
         bold: bool,
-        color: &Color,
+        color: Color,
     ) -> f64 {
         let layout = functions::create_layout(cr);
         layout.set_font_description(Some(&self.make_font(font_size, bold)));
@@ -158,7 +158,7 @@ impl Renderer {
         text: &str,
         y: f64,
         font_size: i32,
-        color: &Color,
+        color: Color,
     ) {
         let layout = functions::create_layout(cr);
         layout.set_font_description(Some(&self.make_font(font_size, false)));
@@ -172,11 +172,11 @@ impl Renderer {
     }
 
     fn draw_section(&self, cr: &Context, text: &str, y: f64) -> f64 {
-        self.draw_text(cr, text, PADDING, y, SECTION_SIZE, true, &self.config.dim_color) + 4.0
+        self.draw_text(cr, text, PADDING, y, SECTION_SIZE, true, self.config.dim_color()) + 4.0
     }
 
     fn draw_separator(&self, cr: &Context, y: f64) {
-        let c = &self.config.dim_color;
+        let c = self.config.dim_color();
         cr.set_source_rgba(c.r, c.g, c.b, 0.3);
         cr.set_line_width(1.0);
         cr.move_to(PADDING, y);
@@ -186,9 +186,9 @@ impl Renderer {
 
     fn draw_model(&self, cr: &Context, model: &ModelInfo, y: f64) -> f64 {
         let dot_color = if model.loaded {
-            &self.config.accent_color
+            self.config.accent_color()
         } else {
-            &self.config.dim_color
+            self.config.dim_color()
         };
 
         // Dot
@@ -197,7 +197,7 @@ impl Renderer {
         cr.fill().expect("fill");
 
         // Name
-        self.draw_text(cr, &model.name, PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, &self.config.fg_color)
+        self.draw_text(cr, &model.name, PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, self.config.fg_color())
     }
 
     fn draw_bar(
@@ -208,19 +208,19 @@ impl Renderer {
         max: f64,
         value_text: &str,
         y: f64,
-        color: &Color,
+        color: Color,
     ) -> f64 {
         let bar_width = self.width as f64 - 2.0 * PADDING;
 
         // Label (left) + value (right)
         let text_y = y;
-        self.draw_text(cr, label, PADDING, text_y, BODY_SIZE, false, &self.config.fg_color);
+        self.draw_text(cr, label, PADDING, text_y, BODY_SIZE, false, self.config.fg_color());
         self.draw_text_right(cr, value_text, text_y, BODY_SIZE, color);
 
         let y = text_y + BODY_SIZE as f64 + 6.0;
 
         // Bar background
-        let bg = &self.config.bar_bg_color;
+        let bg = self.config.bar_bg_color();
         cr.set_source_rgba(bg.r, bg.g, bg.b, bg.a);
         cr.rectangle(PADDING, y, bar_width, BAR_HEIGHT);
         cr.fill().expect("fill");
