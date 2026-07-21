@@ -1,0 +1,85 @@
+# mon-panel configuration
+# All fields are optional — missing values use defaults.
+
+# --- Panel geometry ---
+
+# Panel width in pixels
+panel_width = 260
+
+# Which edge of the screen to dock to: "Left" or "Right"
+side = "Right"
+
+# Slide animation duration in milliseconds
+animation_duration_ms = 200
+
+# Width of the invisible trigger zone at the screen edge, in pixels
+trigger_width = 3
+
+# --- Telemetry ---
+
+# How often to poll for metrics, in milliseconds
+refresh_interval_ms = 2000
+
+# URL of llama-swap (OpenAI-compatible /v1/models endpoint)
+llama_swap_url = "http://localhost:8080"
+
+# Optional custom telemetry relay URL (alternative to Beszel)
+# telemetry_url = "http://localhost:8081"
+
+# --- Beszel Hub ---
+# System metrics via PocketBase REST API.
+# Leave this section out entirely if you don't use Beszel.
+
+[beszel]
+hub_url = "https://hub.example.com"
+email = "user@example.com"
+password = "secret"
+system_id = "abc123def456"
+
+# --- Display ---
+
+# Pango font family string
+font_family = "Sans"
+
+# Base font size in points
+font_size = 13.0
+
+# --- Colors ---
+# Each color is RGBA, values 0.0–1.0.
+# Omit a color section to use its default.
+
+[bg_color]       # Panel background
+r = 0.08
+g = 0.08
+b = 0.10
+a = 0.95
+
+[fg_color]       # Primary text color
+r = 0.9
+g = 0.9
+b = 0.92
+a = 1.0
+
+[accent_color]   # Progress bars, active indicators
+r = 0.3
+g = 0.7
+b = 1.0
+a = 1.0
+
+[warn_color]     # High temperature, warnings
+r = 1.0
+g = 0.6
+b = 0.3
+a = 1.0
+
+[dim_color]       # Section headers, inactive models
+r = 0.5
+g = 0.5
+b = 0.55
+a = 1.0
+
+[bar_bg_color]    # Progress bar background
+r = 0.2
+g = 0.2
+b = 0.25
+a = 1.0
