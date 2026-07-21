@@ -17,8 +17,8 @@ trigger_width = 3
 # --- Telemetry ---
 
 [telemetry]
-# How often to poll for metrics, in milliseconds
-refresh_interval_ms = 2000
+# How often to poll for metrics and record history, in milliseconds
+refresh_interval_ms = 10000
 # URL of llama-swap (OpenAI-compatible /v1/models endpoint)
 llama_swap_url = "http://localhost:8080"
 # Optional custom telemetry relay URL (alternative to Beszel)
@@ -57,5 +57,5 @@ accent = { r = 0.3, g = 0.7, b = 1.0, a = 1.0 }
 warn = { r = 1.0, g = 0.6, b = 0.3, a = 1.0 }
 # Section headers, inactive models
 dim = { r = 0.5, g = 0.5, b = 0.55, a = 1.0 }
-# Progress bar background
+# Graph background
 bar_bg = { r = 0.2, g = 0.2, b = 0.25, a = 1.0 }

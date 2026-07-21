@@ -8,6 +8,61 @@ pub struct Telemetry {
     pub system_name: Option<String>,
 }
 
+/// Time-series history for graphable metrics.
+/// Capacity = graph width in pixels (1 sample = 1 pixel).
+#[derive(Clone, Debug)]
+pub struct History {
+    pub cpu: Vec<f64>,
+    pub ram: Vec<f64>,
+    pub gpu_util: Vec<f64>,
+    pub gpu_vram: Vec<f64>,
+    pub gpu_temp: Vec<f64>,
+    capacity: usize,
+}
+
+impl History {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            cpu: Vec::with_capacity(capacity),
+            ram: Vec::with_capacity(capacity),
+            gpu_util: Vec::with_capacity(capacity),
+            gpu_vram: Vec::with_capacity(capacity),
+            gpu_temp: Vec::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    pub fn push(&mut self, sys: &SystemMetrics) {
+        let cap = self.capacity;
+        let push = |v: &mut Vec<f64>, val: f64| {
+            if v.len() >= cap {
+                v.remove(0);
+            }
+            v.push(val);
+        };
+
+        push(&mut self.cpu, sys.cpu_percent as f64);
+
+        let ram_pct = if sys.memory_total_gb > 0.0 {
+            sys.memory_used_gb / sys.memory_total_gb * 100.0
+        } else {
+            0.0
+        };
+        push(&mut self.ram, ram_pct);
+
+        push(&mut self.gpu_util, sys.gpu_percent as f64);
+
+        let vram_pct = if sys.gpu_memory_total_gb > 0.0 {
+            sys.gpu_memory_used_gb / sys.gpu_memory_total_gb * 100.0
+        } else {
+            0.0
+        };
+        push(&mut self.gpu_vram, vram_pct);
+
+        push(&mut self.gpu_temp, sys.gpu_temp_c as f64);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ModelInfo {
     pub name: String,

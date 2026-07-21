@@ -158,7 +158,7 @@ fn default_panel_width() -> u16 { 260 }
 fn default_anim_ms() -> u64 { 200 }
 fn default_trigger_width() -> u16 { 3 }
 fn default_llama_url() -> String { "http://localhost:8080".to_string() }
-fn default_refresh_ms() -> u64 { 2000 }
+fn default_refresh_ms() -> u64 { 10000 }
 fn default_font() -> String { "Sans".to_string() }
 fn default_font_size() -> f32 { 13.0 }
 fn default_bg_color() -> Color { Color::new(0.08, 0.08, 0.10, 0.95) }

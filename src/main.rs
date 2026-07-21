@@ -11,7 +11,7 @@ use x11rb::protocol::Event;
 use x11rb::protocol::xproto::{EnterNotifyEvent, LeaveNotifyEvent};
 
 use animation::SlideAnimation;
-use telemetry::Telemetry;
+use telemetry::{History, Telemetry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PanelState {
@@ -35,6 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let panel = window::PanelWindow::create(&config)?;
     let renderer = render::Renderer::new(config.panel_width(), panel.screen_height, &config);
+
+    // History for time-series graphs: 1 sample per pixel of graph width
+    let graph_capacity = (config.panel_width() as usize).saturating_sub(32);
+    let mut history = History::new(graph_capacity);
 
     // Telemetry thread
     let (tx, rx) = mpsc::channel::<Telemetry>();
@@ -110,6 +114,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if let Ok(new_t) = rx.try_recv() {
+            if let Some(sys) = &new_t.system {
+                history.push(sys);
+            }
             telemetry = new_t;
             if state != PanelState::Hidden {
                 needs_redraw = true;
@@ -117,7 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if needs_redraw && state != PanelState::Hidden {
-            let data = renderer.render(&telemetry);
+            let data = renderer.render(&telemetry, &history);
             panel.put_image(&data)?;
             needs_redraw = false;
         }
