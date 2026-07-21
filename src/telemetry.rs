@@ -8,15 +8,21 @@ pub struct Telemetry {
     pub system_name: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+pub struct GpuHistory {
+    pub util: Vec<f64>,
+    pub vram: Vec<f64>,
+    pub temp: Vec<f64>,
+}
+
 /// Time-series history for graphable metrics.
 /// Capacity = graph width in pixels (1 sample = 1 pixel).
 #[derive(Clone, Debug)]
 pub struct History {
     pub cpu: Vec<f64>,
+    pub cpu_temp: Vec<f64>,
     pub ram: Vec<f64>,
-    pub gpu_util: Vec<f64>,
-    pub gpu_vram: Vec<f64>,
-    pub gpu_temp: Vec<f64>,
+    pub gpus: Vec<GpuHistory>,
     capacity: usize,
 }
 
@@ -24,10 +30,9 @@ impl History {
     pub fn new(capacity: usize) -> Self {
         Self {
             cpu: Vec::with_capacity(capacity),
+            cpu_temp: Vec::with_capacity(capacity),
             ram: Vec::with_capacity(capacity),
-            gpu_util: Vec::with_capacity(capacity),
-            gpu_vram: Vec::with_capacity(capacity),
-            gpu_temp: Vec::with_capacity(capacity),
+            gpus: Vec::new(),
             capacity,
         }
     }
@@ -42,6 +47,7 @@ impl History {
         };
 
         push(&mut self.cpu, sys.cpu_percent as f64);
+        push(&mut self.cpu_temp, sys.cpu_temp_c as f64);
 
         let ram_pct = if sys.memory_total_gb > 0.0 {
             sys.memory_used_gb / sys.memory_total_gb * 100.0
@@ -50,16 +56,27 @@ impl History {
         };
         push(&mut self.ram, ram_pct);
 
-        push(&mut self.gpu_util, sys.gpu_percent as f64);
+        // Resize gpu history if GPU count changed
+        if self.gpus.len() != sys.gpus.len() {
+            self.gpus = (0..sys.gpus.len())
+                .map(|_| GpuHistory {
+                    util: Vec::with_capacity(cap),
+                    vram: Vec::with_capacity(cap),
+                    temp: Vec::with_capacity(cap),
+                })
+                .collect();
+        }
 
-        let vram_pct = if sys.gpu_memory_total_gb > 0.0 {
-            sys.gpu_memory_used_gb / sys.gpu_memory_total_gb * 100.0
-        } else {
-            0.0
-        };
-        push(&mut self.gpu_vram, vram_pct);
-
-        push(&mut self.gpu_temp, sys.gpu_temp_c as f64);
+        for (i, gpu) in sys.gpus.iter().enumerate() {
+            push(&mut self.gpus[i].util, gpu.percent as f64);
+            let vram_pct = if gpu.memory_total_gb > 0.0 {
+                gpu.memory_used_gb / gpu.memory_total_gb * 100.0
+            } else {
+                0.0
+            };
+            push(&mut self.gpus[i].vram, vram_pct);
+            push(&mut self.gpus[i].temp, gpu.temp_c as f64);
+        }
     }
 }
 
@@ -69,22 +86,27 @@ pub struct ModelInfo {
     pub loaded: bool,
 }
 
+#[derive(Deserialize, Clone, Debug)]
+pub struct GpuInfo {
+    pub name: String,
+    pub percent: f32,
+    pub memory_used_gb: f64,
+    pub memory_total_gb: f64,
+    pub temp_c: f32,
+}
+
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct SystemMetrics {
     #[serde(default)]
     pub cpu_percent: f32,
     #[serde(default)]
+    pub cpu_temp_c: f32,
+    #[serde(default)]
     pub memory_used_gb: f64,
     #[serde(default)]
     pub memory_total_gb: f64,
     #[serde(default)]
-    pub gpu_percent: f32,
-    #[serde(default)]
-    pub gpu_memory_used_gb: f64,
-    #[serde(default)]
-    pub gpu_memory_total_gb: f64,
-    #[serde(default)]
-    pub gpu_temp_c: f32,
+    pub gpus: Vec<GpuInfo>,
     #[serde(default)]
     pub disk_pct: f64,
     #[serde(default)]
@@ -313,40 +335,45 @@ impl TelemetryFetcher {
         let record = records.items.first()?;
         let stats = &record.stats;
 
-        // Parse GPU data (map[string]GPUData) — memory in MB, usage in %
-        let mut gpu_percent = 0.0f32;
-        let mut gpu_mem_used = 0.0f64;
-        let mut gpu_mem_total = 0.0f64;
-        let mut gpu_count = 0u32;
+        // Parse temperature map
+        let temp_map: std::collections::HashMap<String, f64> = if let Some(t) = &stats.t {
+            serde_json::from_value(t.clone()).unwrap_or_default()
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        // CPU temperature: prefer coretemp_core_0, fall back to first coretemp
+        let cpu_temp = temp_map
+            .get("coretemp_core_0")
+            .copied()
+            .or_else(|| temp_map.get("coretemp_package_id_0").copied())
+            .or_else(|| {
+                temp_map
+                    .iter()
+                    .filter(|(k, _)| k.starts_with("coretemp_core"))
+                    .map(|(_, v)| *v)
+                    .next()
+            })
+            .unwrap_or(0.0) as f32;
+
+        // Parse GPU data — keep per-GPU, sort by map key for stable order
+        let mut gpus = Vec::new();
         if let Some(g) = &stats.g {
             if let Ok(map) = serde_json::from_value::<std::collections::HashMap<String, BeszelGpuData>>(g.clone()) {
-                for gpu in map.values() {
-                    gpu_percent += gpu.u as f32;
-                    gpu_mem_used += gpu.mu / 1024.0; // MB → GB
-                    gpu_mem_total += gpu.mt / 1024.0;
-                    gpu_count += 1;
-                }
-                if gpu_count > 0 {
-                    gpu_percent /= gpu_count as f32;
+                let mut entries: Vec<(_, _)> = map.into_iter().collect();
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                for (_, gpu) in entries {
+                    let temp_c = temp_map.get(&gpu.n).copied().unwrap_or(0.0) as f32;
+                    gpus.push(GpuInfo {
+                        name: gpu.n,
+                        percent: gpu.u as f32,
+                        memory_used_gb: gpu.mu / 1024.0,  // MB → GB
+                        memory_total_gb: gpu.mt / 1024.0,
+                        temp_c,
+                    });
                 }
             }
         }
-
-        // Parse temperature (map[string]float64, take first or average)
-        let gpu_temp = if let Some(t) = &stats.t {
-            if let Ok(map) = serde_json::from_value::<std::collections::HashMap<String, f64>>(t.clone()) {
-                // Try to find a GPU temp, otherwise take the first
-                map.iter()
-                    .find(|(k, _)| k.to_lowercase().contains("gpu") || k.to_lowercase().contains("nvidia"))
-                    .or_else(|| map.iter().next())
-                    .map(|(_, v)| *v as f32)
-                    .unwrap_or(0.0)
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
 
         let load_avg = stats
             .la
@@ -356,13 +383,11 @@ impl TelemetryFetcher {
 
         Some(SystemMetrics {
             cpu_percent: stats.cpu as f32,
+            cpu_temp_c: cpu_temp,
             // m / mu are in GB already
             memory_used_gb: stats.mu,
             memory_total_gb: stats.m,
-            gpu_percent,
-            gpu_memory_used_gb: gpu_mem_used,
-            gpu_memory_total_gb: gpu_mem_total,
-            gpu_temp_c: gpu_temp,
+            gpus,
             disk_pct: stats.dp,
             // s / su are in GB
             swap_pct: if stats.s > 0.0 { stats.su / stats.s * 100.0 } else { 0.0 },

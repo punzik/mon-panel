@@ -76,6 +76,16 @@ impl Renderer {
                     &history.cpu, 100.0, y, self.config.accent_color(),
                 );
 
+                let temp_color = if sys.cpu_temp_c > 80.0 {
+                    self.config.warn_color()
+                } else {
+                    self.config.fg_color()
+                };
+                y = self.draw_graph(
+                    &cr, "Temp", &format!("{:.0}°C", sys.cpu_temp_c),
+                    &history.cpu_temp, 100.0, y, temp_color,
+                );
+
                 let mem_pct = if sys.memory_total_gb > 0.0 {
                     sys.memory_used_gb / sys.memory_total_gb * 100.0
                 } else { 0.0 };
@@ -96,31 +106,41 @@ impl Renderer {
                 y += SECTION_GAP;
             }
 
-            // GPU
+            // Per-GPU sections
             if let Some(sys) = &telemetry.system {
-                if sys.gpu_percent > 0.0 || sys.gpu_temp_c > 0.0 || sys.gpu_memory_total_gb > 0.0 {
-                    y = self.draw_section(&cr, "GPU", y);
+                for (i, gpu) in sys.gpus.iter().enumerate() {
+                    let gpu_hist = history.gpus.get(i);
+                    y = self.draw_section(&cr, &format!("GPU {}", gpu.name), y);
 
-                    y = self.draw_graph(
-                        &cr, "Util", &format!("{:.0}%", sys.gpu_percent),
-                        &history.gpu_util, 100.0, y, self.config.accent_color(),
-                    );
+                    if let Some(gh) = gpu_hist {
+                        y = self.draw_graph(
+                            &cr, "Util", &format!("{:.0}%", gpu.percent),
+                            &gh.util, 100.0, y, self.config.accent_color(),
+                        );
 
-let vram_val = format!("{:.1}/{:.0}G", sys.gpu_memory_used_gb, sys.gpu_memory_total_gb);
-                    y = self.draw_graph(
-                        &cr, "VRAM", &vram_val,
-                        &history.gpu_vram, 100.0, y, self.config.accent_color(),
-                    );
+                        let vram_val = format!("{:.1}/{:.0}G", gpu.memory_used_gb, gpu.memory_total_gb);
+                        y = self.draw_graph(
+                            &cr, "VRAM", &vram_val,
+                            &gh.vram, 100.0, y, self.config.accent_color(),
+                        );
 
-                    let temp_color = if sys.gpu_temp_c > 80.0 {
-                        self.config.warn_color()
+                        let temp_color = if gpu.temp_c > 80.0 {
+                            self.config.warn_color()
+                        } else {
+                            self.config.fg_color()
+                        };
+                        y = self.draw_graph(
+                            &cr, "Temp", &format!("{:.0}°C", gpu.temp_c),
+                            &gh.temp, 100.0, y, temp_color,
+                        );
                     } else {
-                        self.config.fg_color()
-                    };
-                    y = self.draw_graph(
-                        &cr, "Temp", &format!("{:.0}°C", sys.gpu_temp_c),
-                        &history.gpu_temp, 100.0, y, temp_color,
-                    );
+                        // No history yet — draw text lines
+                        y = self.draw_text_line(&cr, "Util", &format!("{:.0}%", gpu.percent), y);
+                        let vram_val = format!("{:.1}/{:.0}G", gpu.memory_used_gb, gpu.memory_total_gb);
+                        y = self.draw_text_line(&cr, "VRAM", &vram_val, y);
+                        y = self.draw_text_line(&cr, "Temp", &format!("{:.0}°C", gpu.temp_c), y);
+                    }
+                    y += SECTION_GAP;
                 }
             }
 
