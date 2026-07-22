@@ -77,13 +77,13 @@ impl Renderer {
 
                 y = self.draw_graph(
                     &cr, "CPU", &format!("{:.0}%", sys.cpu_percent),
-                    &history.cpu, 100.0, y, self.config.accent_color(),
+                    &history.cpu, 100.0, y, self.config.cpu_util_color(),
                 );
 
-                let temp_color = if sys.cpu_temp_c > 80.0 {
+                let temp_color = if sys.cpu_temp_c > self.config.cpu_temp_warn() {
                     self.config.warn_color()
                 } else {
-                    self.config.fg_color()
+                    self.config.cpu_temp_color()
                 };
                 y = self.draw_graph(
                     &cr, "Temp", &format!("{:.0}°C", sys.cpu_temp_c),
@@ -95,7 +95,7 @@ impl Renderer {
                 } else { 0.0 };
                 y = self.draw_graph(
                     &cr, "RAM", &format!("{:.0}%", mem_pct),
-                    &history.ram, 100.0, y, self.config.accent_color(),
+                    &history.ram, 100.0, y, self.config.ram_color(),
                 );
 
                 if sys.disk_pct > 0.0 {
@@ -119,19 +119,19 @@ impl Renderer {
                     if let Some(gh) = gpu_hist {
                         y = self.draw_graph(
                             &cr, "Util", &format!("{:.0}%", gpu.percent),
-                            &gh.util, 100.0, y, self.config.accent_color(),
+                            &gh.util, 100.0, y, self.config.gpu_util_color(),
                         );
 
                         let vram_val = format!("{:.1}/{:.0}G", gpu.memory_used_gb, gpu.memory_total_gb);
                         y = self.draw_graph(
                             &cr, "VRAM", &vram_val,
-                            &gh.vram, 100.0, y, self.config.accent_color(),
+                            &gh.vram, 100.0, y, self.config.gpu_vram_color(),
                         );
 
-                        let temp_color = if gpu.temp_c > 80.0 {
+                        let temp_color = if gpu.temp_c > self.config.gpu_temp_warn() {
                             self.config.warn_color()
                         } else {
-                            self.config.fg_color()
+                            self.config.gpu_temp_color()
                         };
                         y = self.draw_graph(
                             &cr, "Temp", &format!("{:.0}°C", gpu.temp_c),

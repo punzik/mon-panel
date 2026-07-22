@@ -53,7 +53,7 @@ font_size = 13.0
 bg = { r = 0.08, g = 0.08, b = 0.10, a = 0.95 }
 # Primary text color
 fg = { r = 0.9, g = 0.9, b = 0.92, a = 1.0 }
-# Progress bars, active indicators
+# Default graph / active indicator (fallback for per-graph colors)
 accent = { r = 0.3, g = 0.7, b = 1.0, a = 1.0 }
 # High temperature, warnings
 warn = { r = 1.0, g = 0.6, b = 0.3, a = 1.0 }
@@ -61,3 +61,18 @@ warn = { r = 1.0, g = 0.6, b = 0.3, a = 1.0 }
 dim = { r = 0.5, g = 0.5, b = 0.55, a = 1.0 }
 # Graph background
 bar_bg = { r = 0.2, g = 0.2, b = 0.25, a = 1.0 }
+
+# Per-graph colors (optional — fall back to accent for utilisation, fg for temp)
+# cpu_util = { r = 0.3, g = 0.7, b = 1.0, a = 1.0 }
+# cpu_temp = { r = 0.9, g = 0.9, b = 0.92, a = 1.0 }
+# ram = { r = 0.3, g = 0.7, b = 1.0, a = 1.0 }
+# gpu_util = { r = 0.3, g = 0.7, b = 1.0, a = 1.0 }
+# gpu_vram = { r = 0.3, g = 0.7, b = 1.0, a = 1.0 }
+# gpu_temp = { r = 0.9, g = 0.9, b = 0.92, a = 1.0 }
+
+# --- Temperature thresholds ---
+# When exceeded, the graph color switches to warn.
+
+[thresholds]
+cpu_temp_warn = 80  # °C
+gpu_temp_warn = 80  # °C (applies to all GPUs)

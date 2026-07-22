@@ -91,7 +91,30 @@ pub struct ColorsSection {
     pub dim: Color,
     #[serde(default = "default_bar_bg_color")]
     pub bar_bg: Color,
+    // Per-graph colors (fall back to accent / fg if not set)
+    #[serde(default)]
+    pub cpu_util: Option<Color>,
+    #[serde(default)]
+    pub cpu_temp: Option<Color>,
+    #[serde(default)]
+    pub ram: Option<Color>,
+    #[serde(default)]
+    pub gpu_util: Option<Color>,
+    #[serde(default)]
+    pub gpu_vram: Option<Color>,
+    #[serde(default)]
+    pub gpu_temp: Option<Color>,
 }
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct ThresholdsSection {
+    #[serde(default = "default_temp_warn")]
+    pub cpu_temp_warn: f32,
+    #[serde(default = "default_temp_warn")]
+    pub gpu_temp_warn: f32,
+}
+
+fn default_temp_warn() -> f32 { 80.0 }
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct Config {
@@ -105,6 +128,8 @@ pub struct Config {
     pub display: DisplaySection,
     #[serde(default)]
     pub colors: ColorsSection,
+    #[serde(default)]
+    pub thresholds: ThresholdsSection,
 }
 
 // --- Flattened view for internal use ---
@@ -154,6 +179,32 @@ impl Config {
     }
     pub fn bar_bg_color(&self) -> Color {
         self.colors.bar_bg
+    }
+
+    // Per-graph colors — fall back to accent (for utilisation) or fg (for temp)
+    pub fn cpu_util_color(&self) -> Color {
+        self.colors.cpu_util.unwrap_or(self.colors.accent)
+    }
+    pub fn cpu_temp_color(&self) -> Color {
+        self.colors.cpu_temp.unwrap_or(self.colors.fg)
+    }
+    pub fn ram_color(&self) -> Color {
+        self.colors.ram.unwrap_or(self.colors.accent)
+    }
+    pub fn gpu_util_color(&self) -> Color {
+        self.colors.gpu_util.unwrap_or(self.colors.accent)
+    }
+    pub fn gpu_vram_color(&self) -> Color {
+        self.colors.gpu_vram.unwrap_or(self.colors.accent)
+    }
+    pub fn gpu_temp_color(&self) -> Color {
+        self.colors.gpu_temp.unwrap_or(self.colors.fg)
+    }
+    pub fn cpu_temp_warn(&self) -> f32 {
+        self.thresholds.cpu_temp_warn
+    }
+    pub fn gpu_temp_warn(&self) -> f32 {
+        self.thresholds.gpu_temp_warn
     }
 }
 
@@ -215,6 +266,21 @@ impl Default for ColorsSection {
             warn: default_warn_color(),
             dim: default_dim_color(),
             bar_bg: default_bar_bg_color(),
+            cpu_util: None,
+            cpu_temp: None,
+            ram: None,
+            gpu_util: None,
+            gpu_vram: None,
+            gpu_temp: None,
+        }
+    }
+}
+
+impl Default for ThresholdsSection {
+    fn default() -> Self {
+        Self {
+            cpu_temp_warn: default_temp_warn(),
+            gpu_temp_warn: default_temp_warn(),
         }
     }
 }
@@ -227,6 +293,7 @@ impl Default for Config {
             beszel: None,
             display: DisplaySection::default(),
             colors: ColorsSection::default(),
+            thresholds: ThresholdsSection::default(),
         }
     }
 }
