@@ -58,15 +58,6 @@ impl Renderer {
             self.draw_separator(&cr, y);
             y += SECTION_GAP;
 
-            // Models
-            if !telemetry.models.is_empty() {
-                y = self.draw_section(&cr, "MODELS", y);
-                for model in &telemetry.models {
-                    y = self.draw_model(&cr, model, y);
-                }
-                y += SECTION_GAP;
-            }
-
             // System
             if let Some(sys) = &telemetry.system {
                 y = self.draw_section(&cr, "SYSTEM", y);
@@ -142,6 +133,15 @@ impl Renderer {
                     }
                     y += SECTION_GAP;
                 }
+            }
+
+            // Models
+            if !telemetry.models.is_empty() {
+                y = self.draw_section(&cr, "MODELS", y);
+                for model in &telemetry.models {
+                    y = self.draw_model(&cr, model, y);
+                }
+                y += SECTION_GAP;
             }
 
             // No data
