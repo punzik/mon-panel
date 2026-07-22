@@ -348,7 +348,7 @@ impl TelemetryFetcher {
         let token = self.get_token(beszel)?;
 
         let url = format!(
-            "{}/api/collections/system_stats/records?filter=system='{}'&sort=-created&perPage=1",
+            "{}/api/collections/system_stats/records?filter=system='{}'%26%26type='1m'&sort=-created&perPage=1",
             beszel.hub_url.trim_end_matches('/'),
             beszel.system_id
         );
