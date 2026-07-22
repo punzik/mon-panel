@@ -29,6 +29,21 @@ impl PanelWindow {
         let screen = &conn.setup().roots[screen_num];
         let screen_width = screen.width_in_pixels;
         let screen_height = screen.height_in_pixels;
+        let panel_width = config.panel_width();
+        let trigger_width = config.trigger_width();
+
+        if panel_width > screen_width {
+            return Err(format!(
+                "panel.width ({panel_width}) exceeds screen width ({screen_width})"
+            )
+            .into());
+        }
+        if trigger_width > screen_width {
+            return Err(format!(
+                "panel.trigger_width ({trigger_width}) exceeds screen width ({screen_width})"
+            )
+            .into());
+        }
 
         // Find 32-bit TrueColor visual
         let depth: u8 = 32;
@@ -36,7 +51,11 @@ impl PanelWindow {
             .allowed_depths
             .iter()
             .find(|d| d.depth == depth)
-            .and_then(|d| d.visuals.iter().find(|v| v.class == VisualClass::TRUE_COLOR))
+            .and_then(|d| {
+                d.visuals
+                    .iter()
+                    .find(|v| v.class == VisualClass::TRUE_COLOR)
+            })
             .ok_or("No 32-bit TrueColor visual available")?;
 
         let visual_id = visual.visual_id;
@@ -48,15 +67,11 @@ impl PanelWindow {
         // Position calculations
         let (visible_x, hidden_x, trigger_x) = match config.side() {
             Side::Right => (
-                (screen_width - config.panel_width()) as i32,
+                (screen_width - panel_width) as i32,
                 screen_width as i32,
-                (screen_width - config.trigger_width()) as i32,
+                (screen_width - trigger_width) as i32,
             ),
-            Side::Left => (
-                0i32,
-                -(config.panel_width() as i32),
-                0i32,
-            ),
+            Side::Left => (0i32, -(config.panel_width() as i32), 0i32),
         };
 
         // --- Panel window (32-bit, override-redirect) ---
@@ -67,7 +82,7 @@ impl PanelWindow {
             screen.root,
             hidden_x as i16,
             0,
-            config.panel_width(),
+            panel_width,
             screen_height,
             0,
             WindowClass::INPUT_OUTPUT,
@@ -77,7 +92,12 @@ impl PanelWindow {
                 .colormap(colormap)
                 .background_pixel(0)
                 .border_pixel(0)
-                .event_mask(EventMask::EXPOSURE | EventMask::ENTER_WINDOW | EventMask::LEAVE_WINDOW),
+                .event_mask(
+                    EventMask::EXPOSURE
+                        | EventMask::ENTER_WINDOW
+                        | EventMask::LEAVE_WINDOW
+                        | EventMask::BUTTON_PRESS,
+                ),
         )?;
 
         // --- Trigger window (input-only, 1px at edge) ---
@@ -88,7 +108,7 @@ impl PanelWindow {
             screen.root,
             trigger_x as i16,
             0,
-            config.trigger_width(),
+            trigger_width,
             screen_height,
             0,
             WindowClass::INPUT_ONLY,
@@ -115,7 +135,7 @@ impl PanelWindow {
             trigger_win,
             gc,
             depth,
-            panel_width: config.panel_width(),
+            panel_width,
             side: config.side(),
             visible_x,
             hidden_x,

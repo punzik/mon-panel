@@ -18,6 +18,9 @@ impl SlideAnimation {
     }
 
     pub fn current_value(&self) -> f64 {
+        if self.duration.is_zero() {
+            return self.to;
+        }
         let elapsed = self.start.elapsed().as_secs_f64();
         let total = self.duration.as_secs_f64();
         let t = (elapsed / total).clamp(0.0, 1.0);
@@ -35,5 +38,17 @@ fn ease_in_out(t: f64) -> f64 {
         4.0 * t * t * t
     } else {
         1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SlideAnimation;
+
+    #[test]
+    fn zero_duration_animation_finishes_at_destination() {
+        let animation = SlideAnimation::new(10.0, 20.0, 0);
+        assert_eq!(animation.current_value(), 20.0);
+        assert!(animation.is_finished());
     }
 }

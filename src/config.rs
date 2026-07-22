@@ -1,17 +1,12 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Default)]
 #[allow(dead_code)]
 pub enum Side {
     Left,
+    #[default]
     Right,
-}
-
-impl Default for Side {
-    fn default() -> Self {
-        Side::Right
-    }
 }
 
 #[derive(Deserialize, Clone, Copy, Debug)]
@@ -73,7 +68,6 @@ pub struct DisplaySection {
     #[serde(default = "default_font")]
     pub font_family: String,
     #[serde(default = "default_font_size")]
-    #[allow(dead_code)]
     pub font_size: f32,
 }
 
@@ -114,9 +108,11 @@ pub struct ThresholdsSection {
     pub gpu_temp_warn: f32,
 }
 
-fn default_temp_warn() -> f32 { 80.0 }
+fn default_temp_warn() -> f32 {
+    80.0
+}
 
-#[derive(Deserialize, Clone, Debug)]
+#[derive(Deserialize, Clone, Debug, Default)]
 pub struct Config {
     #[serde(default)]
     pub panel: PanelSection,
@@ -161,6 +157,85 @@ impl Config {
     }
     pub fn font_family(&self) -> &str {
         &self.display.font_family
+    }
+    pub fn font_size(&self) -> f32 {
+        self.display.font_size
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.panel.width < 33 {
+            return Err("panel.width must be at least 33 pixels".to_string());
+        }
+        if self.panel.trigger_width == 0 {
+            return Err("panel.trigger_width must be at least 1 pixel".to_string());
+        }
+        if self.telemetry.refresh_interval_ms == 0 {
+            return Err("telemetry.refresh_interval_ms must be greater than zero".to_string());
+        }
+        if !self.display.font_size.is_finite() || self.display.font_size <= 0.0 {
+            return Err("display.font_size must be a positive finite number".to_string());
+        }
+        for (name, color) in [
+            ("colors.bg", self.colors.bg),
+            ("colors.fg", self.colors.fg),
+            ("colors.accent", self.colors.accent),
+            ("colors.warn", self.colors.warn),
+            ("colors.dim", self.colors.dim),
+            ("colors.bar_bg", self.colors.bar_bg),
+        ] {
+            if ![color.r, color.g, color.b, color.a]
+                .iter()
+                .all(|component| component.is_finite() && (0.0..=1.0).contains(component))
+            {
+                return Err(format!(
+                    "{name} components must be finite values from 0.0 to 1.0"
+                ));
+            }
+        }
+        for (name, color) in [
+            ("colors.cpu_util", self.colors.cpu_util),
+            ("colors.cpu_temp", self.colors.cpu_temp),
+            ("colors.ram", self.colors.ram),
+            ("colors.gpu_util", self.colors.gpu_util),
+            ("colors.gpu_vram", self.colors.gpu_vram),
+            ("colors.gpu_temp", self.colors.gpu_temp),
+        ] {
+            if let Some(color) = color {
+                if ![color.r, color.g, color.b, color.a]
+                    .iter()
+                    .all(|component| component.is_finite() && (0.0..=1.0).contains(component))
+                {
+                    return Err(format!(
+                        "{name} components must be finite values from 0.0 to 1.0"
+                    ));
+                }
+            }
+        }
+        if !self.thresholds.cpu_temp_warn.is_finite() || self.thresholds.cpu_temp_warn < 0.0 {
+            return Err(
+                "thresholds.cpu_temp_warn must be a non-negative finite number".to_string(),
+            );
+        }
+        if !self.thresholds.gpu_temp_warn.is_finite() || self.thresholds.gpu_temp_warn < 0.0 {
+            return Err(
+                "thresholds.gpu_temp_warn must be a non-negative finite number".to_string(),
+            );
+        }
+        if let Some(beszel) = &self.beszel {
+            for (name, value) in [
+                ("beszel.hub_url", &beszel.hub_url),
+                ("beszel.email", &beszel.email),
+                ("beszel.password", &beszel.password),
+                ("beszel.system_id", &beszel.system_id),
+            ] {
+                if value.trim().is_empty() {
+                    return Err(format!(
+                        "{name} must not be empty when [beszel] is configured"
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
     pub fn bg_color(&self) -> Color {
         self.colors.bg
@@ -210,19 +285,45 @@ impl Config {
 
 // --- Default functions ---
 
-fn default_panel_width() -> u16 { 260 }
-fn default_anim_ms() -> u64 { 200 }
-fn default_trigger_width() -> u16 { 3 }
-fn default_llama_url() -> String { "http://localhost:8080".to_string() }
-fn default_refresh_ms() -> u64 { 10000 }
-fn default_font() -> String { "Sans".to_string() }
-fn default_font_size() -> f32 { 13.0 }
-fn default_bg_color() -> Color { Color::new(0.08, 0.08, 0.10, 0.95) }
-fn default_fg_color() -> Color { Color::new(0.9, 0.9, 0.92, 1.0) }
-fn default_accent_color() -> Color { Color::new(0.3, 0.7, 1.0, 1.0) }
-fn default_warn_color() -> Color { Color::new(1.0, 0.6, 0.3, 1.0) }
-fn default_dim_color() -> Color { Color::new(0.5, 0.5, 0.55, 1.0) }
-fn default_bar_bg_color() -> Color { Color::new(0.2, 0.2, 0.25, 1.0) }
+fn default_panel_width() -> u16 {
+    260
+}
+fn default_anim_ms() -> u64 {
+    200
+}
+fn default_trigger_width() -> u16 {
+    3
+}
+fn default_llama_url() -> String {
+    "http://localhost:8080".to_string()
+}
+fn default_refresh_ms() -> u64 {
+    10000
+}
+fn default_font() -> String {
+    "Sans".to_string()
+}
+fn default_font_size() -> f32 {
+    13.0
+}
+fn default_bg_color() -> Color {
+    Color::new(0.08, 0.08, 0.10, 0.95)
+}
+fn default_fg_color() -> Color {
+    Color::new(0.9, 0.9, 0.92, 1.0)
+}
+fn default_accent_color() -> Color {
+    Color::new(0.3, 0.7, 1.0, 1.0)
+}
+fn default_warn_color() -> Color {
+    Color::new(1.0, 0.6, 0.3, 1.0)
+}
+fn default_dim_color() -> Color {
+    Color::new(0.5, 0.5, 0.55, 1.0)
+}
+fn default_bar_bg_color() -> Color {
+    Color::new(0.2, 0.2, 0.25, 1.0)
+}
 
 // --- Default impls for sections ---
 
@@ -285,19 +386,6 @@ impl Default for ThresholdsSection {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            panel: PanelSection::default(),
-            telemetry: TelemetrySection::default(),
-            beszel: None,
-            display: DisplaySection::default(),
-            colors: ColorsSection::default(),
-            thresholds: ThresholdsSection::default(),
-        }
-    }
-}
-
 // --- Config loading ---
 
 pub fn default_config_path() -> PathBuf {
@@ -318,9 +406,33 @@ pub fn load_config(path: &Path) -> Config {
                 Config::default()
             }
         },
-        Err(_) => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             eprintln!("[config] {} not found, using defaults", path.display());
             Config::default()
         }
+        Err(error) => {
+            eprintln!(
+                "[config] failed to read {}: {error}; using defaults",
+                path.display()
+            );
+            Config::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn defaults_are_valid() {
+        assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_a_panel_that_cannot_render_graphs() {
+        let mut config = Config::default();
+        config.panel.width = 32;
+        assert!(config.validate().is_err());
     }
 }

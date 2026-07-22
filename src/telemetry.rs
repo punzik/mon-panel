@@ -1,6 +1,6 @@
+use serde::Deserialize;
 use std::io::BufRead;
 use std::sync::{Arc, Mutex};
-use serde::Deserialize;
 use std::time::{Duration, Instant};
 
 #[derive(Default, Clone, Debug)]
@@ -30,6 +30,7 @@ pub struct History {
 
 impl History {
     pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
         Self {
             cpu: Vec::with_capacity(capacity),
             cpu_temp: Vec::with_capacity(capacity),
@@ -42,7 +43,7 @@ impl History {
     pub fn push(&mut self, sys: &SystemMetrics) {
         let cap = self.capacity;
         let push = |v: &mut Vec<f64>, val: f64| {
-            if v.len() >= cap {
+            if v.len() == cap {
                 v.remove(0);
             }
             v.push(val);
@@ -173,42 +174,42 @@ struct BeszelStats {
     #[serde(default)]
     cpu: f64,
     #[serde(default)]
-    m: f64,  // max memory (bytes)
+    m: f64, // max memory (bytes)
     #[serde(default)]
     mu: f64, // memory used (bytes)
     #[serde(default)]
     mp: f64, // memory percentage
     #[serde(default)]
-    s: f64,  // swap total
+    s: f64, // swap total
     #[serde(default)]
     su: f64, // swap used
     #[serde(default)]
-    d: f64,  // disk total
+    d: f64, // disk total
     #[serde(default)]
     du: f64, // disk used
     #[serde(default)]
     dp: f64, // disk percentage
     #[serde(default)]
-    t: Option<serde_json::Value>,               // temperatures
+    t: Option<serde_json::Value>, // temperatures
     #[serde(default)]
-    g: Option<serde_json::Value>,               // GPU data
+    g: Option<serde_json::Value>, // GPU data
     #[serde(default)]
-    la: Option<Vec<f64>>,                       // load avg [1, 5, 15]
+    la: Option<Vec<f64>>, // load avg [1, 5, 15]
 }
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
 struct BeszelGpuData {
     #[serde(default)]
-    n: String,  // name
+    n: String, // name
     #[serde(default)]
-    mu: f64,    // memory used
+    mu: f64, // memory used
     #[serde(default)]
-    mt: f64,    // memory total
+    mt: f64, // memory total
     #[serde(default)]
-    u: f64,     // usage %
+    u: f64, // usage %
     #[serde(default)]
-    p: f64,     // power
+    p: f64, // power
 }
 
 pub struct TelemetryFetcher {
@@ -243,12 +244,19 @@ impl TelemetryFetcher {
     }
 
     pub fn fetch(&mut self) -> Telemetry {
-        let statuses = self.model_statuses.lock().unwrap().clone();
+        let statuses = match self.model_statuses.lock() {
+            Ok(statuses) => statuses.clone(),
+            Err(poisoned) => {
+                eprintln!("[sse] status cache lock was poisoned; recovering");
+                poisoned.into_inner().clone()
+            }
+        };
         let models = fetch_models(
             self.config.llama_swap_url(),
             self.config.llama_swap_api_key(),
             &statuses,
-        ).unwrap_or_default();
+        )
+        .unwrap_or_default();
 
         let (system, system_name) = if let Some(beszel) = self.config.beszel.clone() {
             let sys = self.fetch_beszel(&beszel);
@@ -268,6 +276,11 @@ impl TelemetryFetcher {
             system,
             system_name,
         }
+    }
+
+    fn clear_token(&mut self) {
+        self.token = None;
+        self.token_time = None;
     }
 
     fn get_token(&mut self, beszel: &crate::config::BeszelConfig) -> Option<String> {
@@ -340,26 +353,40 @@ impl TelemetryFetcher {
         self.system_name.clone()
     }
 
-    fn fetch_beszel(
-        &mut self,
-        beszel: &crate::config::BeszelConfig,
-    ) -> Option<SystemMetrics> {
-        let token = self.get_token(beszel)?;
-
+    fn fetch_beszel(&mut self, beszel: &crate::config::BeszelConfig) -> Option<SystemMetrics> {
         let url = format!(
             "{}/api/collections/system_stats/records?filter=system='{}'%26%26type='1m'&sort=-created&perPage=1",
             beszel.hub_url.trim_end_matches('/'),
             beszel.system_id
         );
+        let request_stats = |token: &str| {
+            ureq::get(&url)
+                .timeout(Duration::from_secs(2))
+                .set("Authorization", &format!("Bearer {token}"))
+                .call()
+                .map_err(Box::new)
+        };
 
-        let resp = ureq::get(&url)
-            .timeout(Duration::from_secs(2))
-            .set("Authorization", &format!("Bearer {token}"))
-            .call()
-            .map_err(|e| {
-                eprintln!("[beszel] fetch stats failed: {e}");
-            })
-            .ok()?;
+        let token = self.get_token(beszel)?;
+        let resp = match request_stats(&token) {
+            Ok(response) => response,
+            Err(error) if matches!(error.as_ref(), ureq::Error::Status(401 | 403, _)) => {
+                eprintln!("[beszel] token rejected; re-authenticating");
+                self.clear_token();
+                let refreshed_token = self.get_token(beszel)?;
+                match request_stats(&refreshed_token) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        eprintln!("[beszel] fetch stats failed after re-authentication: {error}");
+                        return None;
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("[beszel] fetch stats failed: {error}");
+                return None;
+            }
+        };
 
         let records: PbRecordsResponse<SystemStatsRecord> = resp.into_json().ok()?;
         let record = records.items.first()?;
@@ -389,7 +416,10 @@ impl TelemetryFetcher {
         // Parse GPU data — keep per-GPU, sort by map key for stable order
         let mut gpus = Vec::new();
         if let Some(g) = &stats.g {
-            if let Ok(map) = serde_json::from_value::<std::collections::HashMap<String, BeszelGpuData>>(g.clone()) {
+            if let Ok(map) = serde_json::from_value::<
+                std::collections::HashMap<String, BeszelGpuData>,
+            >(g.clone())
+            {
                 let mut entries: Vec<(_, _)> = map.into_iter().collect();
                 entries.sort_by(|a, b| a.0.cmp(&b.0));
                 for (_, gpu) in entries {
@@ -397,7 +427,7 @@ impl TelemetryFetcher {
                     gpus.push(GpuInfo {
                         name: gpu.n,
                         percent: gpu.u as f32,
-                        memory_used_gb: gpu.mu / 1024.0,  // MB → GB
+                        memory_used_gb: gpu.mu / 1024.0, // MB → GB
                         memory_total_gb: gpu.mt / 1024.0,
                         temp_c,
                     });
@@ -420,7 +450,11 @@ impl TelemetryFetcher {
             gpus,
             disk_pct: stats.dp,
             // s / su are in GB
-            swap_pct: if stats.s > 0.0 { stats.su / stats.s * 100.0 } else { 0.0 },
+            swap_pct: if stats.s > 0.0 {
+                stats.su / stats.s * 100.0
+            } else {
+                0.0
+            },
             load_avg,
             uptime_secs: 0,
         })
@@ -446,38 +480,44 @@ fn fetch_models(
     base_url: &str,
     api_key: Option<&str>,
     statuses: &std::collections::HashMap<String, String>,
-) -> Result<Vec<ModelInfo>, ureq::Error> {
+) -> Result<Vec<ModelInfo>, Box<dyn std::error::Error>> {
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let mut req = ureq::get(&url).timeout(Duration::from_secs(2));
     if let Some(key) = api_key {
         req = req.set("Authorization", &format!("Bearer {key}"));
     }
     let resp: ModelsResponse = req.call()?.into_json()?;
-
-    let models: Vec<ModelInfo> = resp.data
+    let ready_ids: Vec<String> = resp
+        .data
         .into_iter()
-        .filter_map(|m| {
-            let state = statuses
-                .get(&m.id)
-                .map(|s| s.as_str())
-                .unwrap_or("stopped");
-
-            if state == "ready" {
-                let metrics = fetch_model_metrics(base_url, &m.id, api_key);
-                Some(ModelInfo {
-                    name: m.id,
-                    state: ModelState::Ready,
-                    is_processing: metrics.4,
-                    prompt_tokens_total: metrics.0,
-                    tokens_predicted_total: metrics.1,
-                    prompt_tokens_seconds: metrics.2,
-                    predicted_tokens_seconds: metrics.3,
-                })
-            } else {
-                None
-            }
+        .filter(|model| {
+            statuses
+                .get(&model.id)
+                .is_some_and(|state| state == "ready")
         })
+        .map(|model| model.id)
         .collect();
+
+    let models = std::thread::scope(|scope| {
+        ready_ids
+            .into_iter()
+            .map(|model_id| {
+                scope.spawn(move || {
+                    let metrics = fetch_model_metrics(base_url, &model_id, api_key);
+                    ModelInfo {
+                        name: model_id,
+                        state: ModelState::Ready,
+                        is_processing: metrics.4,
+                        prompt_tokens_total: metrics.0,
+                        tokens_predicted_total: metrics.1,
+                        prompt_tokens_seconds: metrics.2,
+                        predicted_tokens_seconds: metrics.3,
+                    }
+                })
+            })
+            .map(|handle| handle.join().expect("model metrics worker panicked"))
+            .collect()
+    });
 
     Ok(models)
 }
@@ -490,10 +530,11 @@ fn sse_loop(
 ) {
     let url = format!("{}/api/events", base_url.trim_end_matches('/'));
     loop {
-        if sse_connect(&url, api_key, statuses).is_err() {
-            eprintln!("[sse] disconnected, reconnecting in 2s...");
-            std::thread::sleep(Duration::from_secs(2));
+        match sse_connect(&url, api_key, statuses) {
+            Ok(()) => eprintln!("[sse] stream ended, reconnecting in 2s..."),
+            Err(error) => eprintln!("[sse] disconnected ({error}), reconnecting in 2s..."),
         }
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 
@@ -519,7 +560,13 @@ fn sse_connect(
         if let Ok(evt) = serde_json::from_str::<SseEvent>(json_str) {
             if evt.event_type == "modelStatus" {
                 if let Ok(model_statuses) = serde_json::from_str::<Vec<ModelStatus>>(&evt.data) {
-                    let mut cache = statuses.lock().unwrap();
+                    let mut cache = match statuses.lock() {
+                        Ok(cache) => cache,
+                        Err(poisoned) => {
+                            eprintln!("[sse] status cache lock was poisoned; recovering");
+                            poisoned.into_inner()
+                        }
+                    };
                     cache.clear();
                     for s in model_statuses {
                         cache.insert(s.id, s.state);
@@ -542,7 +589,7 @@ fn fetch_model_metrics(
     let url = format!(
         "{}/upstream/{}/metrics",
         base_url.trim_end_matches('/'),
-        model_id
+        encode_path_segment(model_id)
     );
     let mut req = ureq::get(&url).timeout(Duration::from_secs(2));
     if let Some(key) = api_key {
@@ -565,23 +612,48 @@ fn fetch_model_metrics(
         if line.starts_with('#') || line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(2, ' ');
-        let name = parts.next().unwrap_or("");
+        let mut parts = line.split_whitespace();
+        let metric = parts.next().unwrap_or("");
+        let name = metric.split_once('{').map_or(metric, |(name, _)| name);
         let value = parts.next().unwrap_or("");
         match name {
-            "llamacpp:prompt_tokens_total" => prompt_total = value.parse().unwrap_or(0),
-            "llamacpp:tokens_predicted_total" => predicted_total = value.parse().unwrap_or(0),
-            "llamacpp:prompt_tokens_seconds" => prompt_tok_s = value.parse().unwrap_or(0.0),
-            "llamacpp:predicted_tokens_seconds" => predicted_tok_s = value.parse().unwrap_or(0.0),
-            "llamacpp:requests_processing" => requests_processing = value.parse().unwrap_or(0),
+            "llamacpp:prompt_tokens_total" => prompt_total += value.parse::<u64>().unwrap_or(0),
+            "llamacpp:tokens_predicted_total" => {
+                predicted_total += value.parse::<u64>().unwrap_or(0)
+            }
+            "llamacpp:prompt_tokens_seconds" => prompt_tok_s += value.parse::<f64>().unwrap_or(0.0),
+            "llamacpp:predicted_tokens_seconds" => {
+                predicted_tok_s += value.parse::<f64>().unwrap_or(0.0)
+            }
+            "llamacpp:requests_processing" => {
+                requests_processing += value.parse::<i64>().unwrap_or(0)
+            }
             _ => {}
         }
     }
 
-    (prompt_total, predicted_total, prompt_tok_s, predicted_tok_s, requests_processing > 0)
+    (
+        prompt_total,
+        predicted_total,
+        prompt_tok_s,
+        predicted_tok_s,
+        requests_processing > 0,
+    )
 }
 
-// --- sysinfo-crawler /api/metrics response types ---
+fn encode_path_segment(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+// --- sysmetrics /api/metrics response types ---
 
 #[derive(Deserialize)]
 struct SysinfoResponse {
@@ -654,9 +726,7 @@ struct SysinfoGpu {
 
 /// Fetch system metrics from sysinfo-crawler `/api/metrics`.
 /// Returns (SystemMetrics, hostname).
-fn fetch_system_metrics(
-    url: &str,
-) -> Result<(SystemMetrics, String), Box<dyn std::error::Error>> {
+fn fetch_system_metrics(url: &str) -> Result<(SystemMetrics, String), Box<dyn std::error::Error>> {
     let endpoint = format!("{}/api/metrics", url.trim_end_matches('/'));
     let resp: SysinfoResponse = ureq::get(&endpoint)
         .timeout(Duration::from_secs(2))
@@ -715,4 +785,14 @@ fn fetch_system_metrics(
     };
 
     Ok((metrics, resp.system.hostname))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_path_segment;
+
+    #[test]
+    fn encodes_model_id_as_one_url_path_segment() {
+        assert_eq!(encode_path_segment("model/a b"), "model%2Fa%20b");
+    }
 }

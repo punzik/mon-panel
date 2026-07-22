@@ -64,6 +64,9 @@ cargo run --release -- --config /path/to/config.toml
 cargo run --release -- --visible
 ```
 
+Use the mouse wheel while the pointer is over the panel to scroll when its
+content exceeds the screen height. A scrollbar appears at the right edge.
+
 ## Data Sources
 
 | Source | Data | How |

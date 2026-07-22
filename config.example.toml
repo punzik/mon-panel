@@ -5,7 +5,7 @@
 # --- Panel geometry ---
 
 [panel]
-# Panel width in pixels
+# Panel width in pixels (at least 33, no wider than the screen)
 width = 260
 # Which edge of the screen to dock to: "Left" or "Right"
 side = "Right"
@@ -23,7 +23,7 @@ refresh_interval_ms = 10000
 llama_swap_url = "http://localhost:8080"
 # API key for llama-swap (Bearer token, required if auth is enabled)
 # llama_swap_api_key = "sk-..."
-# sysinfo-crawler URL (alternative to Beszel for system metrics)
+# sysmetrics URL (alternative to Beszel for system metrics)
 # If [beszel] is present, it takes priority over this.
 # telemetry_url = "http://172.16.3.66:9100"
 
