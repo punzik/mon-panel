@@ -1,17 +1,17 @@
 # mon-panel
 
-Выезжающая вертикальная панель для отображения телеметрии сервера с инференсом LLM.
-Позиционируется у правого края экрана, скрыта в обычном состоянии, выезжает при
-наведении мыши на край. Ориентирована на работу в оконном менеджере i3.
+A slide-out vertical panel displaying LLM server telemetry. Docked to the
+right edge of the screen, hidden by default, slides out on mouse hover.
+Designed for the i3 window manager.
 
-## Конфигурация
+## Configuration
 
-Конфиг в TOML. По умолчанию ищется в `~/.config/mon-panel/config.toml`,
-можно указать через `--config path`:
+TOML config file. By default searched in `~/.config/mon-panel/config.toml`,
+can be overridden with `--config path`:
 
 ```toml
-# Все поля опциональны — отсутствующие используют значения по умолчанию
-# Секции могут идти в любом порядке
+# All fields are optional — missing values use defaults
+# Sections can appear in any order
 
 [panel]
 width = 260
@@ -23,11 +23,11 @@ trigger_width = 3
 refresh_interval_ms = 10000
 llama_swap_url = "http://localhost:8080"
 # llama_swap_api_key = "sk-..."
-# Альтернатива Beszel — sysmetrics (https://github.com/punzik/sysmetrics)
-# Если [beszel] задан, он имеет приоритет над telemetry_url
+# Alternative to Beszel: sysmetrics (https://github.com/punzik/sysmetrics)
+# If [beszel] is present, it takes priority over telemetry_url
 # telemetry_url = "http://172.16.3.66:9100"
 
-# Beszel Hub — убрать секцию целиком, если используется sysmetrics
+# Beszel Hub — omit this section entirely if using sysmetrics
 [beszel]
 hub_url = "https://mon.embddr.xyz"
 email = "user@example.com"
@@ -51,71 +51,71 @@ cpu_temp_warn = 80
 gpu_temp_warn = 80
 ```
 
-## Запуск
+## Running
 
 ```sh
 nix develop
 cargo run --release
 
-# Указать конфиг явно:
+# Specify config explicitly:
 cargo run --release -- --config /path/to/config.toml
 
-# Дебаг (панель стартует видимой):
+# Debug (panel starts visible):
 cargo run --release -- --visible
 ```
 
-## Источники данных
+## Data Sources
 
-| Источник | Что получает | Как |
+| Source | Data | How |
 |---|---|---|
-| **Beszel Hub** | CPU, RAM, Disk, Swap, GPU, температура | PocketBase REST API (`/api/collections/system_stats/records`) |
-| **[sysmetrics](https://github.com/punzik/sysmetrics)** | CPU, RAM, Disk, Swap, GPU, температура | REST API (`/api/metrics`) |
-| **llama-swap** | Список загруженных моделей, метрики инференса | OpenAI-совместимый `/v1/models`, SSE `/api/events`, Prometheus `/upstream/<id>/metrics` |
+| **Beszel Hub** | CPU, RAM, Disk, Swap, GPU, temperatures | PocketBase REST API (`/api/collections/system_stats/records`) |
+| **[sysmetrics](https://github.com/punzik/sysmetrics)** | CPU, RAM, Disk, Swap, GPU, temperatures | REST API (`/api/metrics`) |
+| **llama-swap** | Loaded models, inference metrics | OpenAI-compatible `/v1/models`, SSE `/api/events`, Prometheus `/upstream/<id>/metrics` |
 
-Системные метрики (CPU, RAM, GPU, температуры) можно получать из одного из
-двух источников на выбор:
+System metrics (CPU, RAM, GPU, temperatures) can be obtained from one of two
+sources:
 
 ### Beszel Hub
 
-Конфигурация через секцию `[beszel]`. Панель аутентифицируется в Hub
-(JWT, кэш 30 мин) и опрашивает метрики каждые `refresh_interval_ms`.
-Данные обновляются раз в 60 секунд (ограничение Beszel Hub REST API).
+Configured via the `[beszel]` section. The panel authenticates with Hub
+(JWT, cached 30 min) and polls metrics every `refresh_interval_ms`.
+Data updates every 60 seconds (Beszel Hub REST API limitation).
 
 ### sysmetrics
 
-Альтернатива Beszel — [sysmetrics](https://github.com/punzik/sysmetrics),
-лёгкий Rust-сервис, читающий системные метрики напрямую (`/sys/class/hwmon`,
-`nvidia-smi`, `sysinfo`). В конфиге указывается `telemetry_url` в секции
-`[telemetry]`, секция `[beszel]` при этом не нужна:
+Alternative to Beszel — [sysmetrics](https://github.com/punzik/sysmetrics),
+a lightweight Rust service that reads system metrics directly (`/sys/class/hwmon`,
+`nvidia-smi`, `sysinfo`). Set `telemetry_url` in the `[telemetry]` section;
+the `[beszel]` section is not needed:
 
 ```toml
 [telemetry]
 telemetry_url = "http://172.16.3.66:9100"
 ```
 
-Если `[beszel]` присутствует, она имеет приоритет над `telemetry_url`.
-Данные от sysmetrics доступны без задержки (запрос в реальном времени).
+If `[beszel]` is present, it takes priority over `telemetry_url`.
+Data from sysmetrics is available without delay (real-time request).
 
-## Стек
+## Tech Stack
 
-| Слой | Выбор |
+| Layer | Choice |
 |---|---|
-| Язык | Rust |
+| Language | Rust |
 | X11 | x11rb (pure Rust) |
-| Графика | cairo-rs |
-| Текст | pango + pangocairo |
+| Graphics | cairo-rs |
+| Text | pango + pangocairo |
 | HTTP | ureq |
 | JSON | serde + serde_json |
-| Конфиг | toml + serde |
+| Config | toml + serde |
 
-## Структура
+## Project Structure
 
 ```
 src/
-  main.rs        Главный цикл, конечный автомат, парсинг --config
-  config.rs      TOML-конфиг, дефолты, загрузка
-  window.rs      X11: 32-битное ARGB-окно (override_redirect), trigger
-  render.rs      Cairo/Pango: фон, текст, прогресс-бары
+  main.rs        Main loop, state machine, --config parsing
+  config.rs      TOML config, defaults, loading
+  window.rs      X11: 32-bit ARGB window (override_redirect), trigger
+  render.rs      Cairo/Pango: background, text, sparkline graphs
   telemetry.rs   TelemetryFetcher: Beszel Hub / sysmetrics + llama-swap
-  animation.rs   Ease-in-out анимация
+  animation.rs   Ease-in-out animation
 ```
