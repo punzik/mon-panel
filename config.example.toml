@@ -21,6 +21,8 @@ trigger_width = 3
 refresh_interval_ms = 10000
 # URL of llama-swap (OpenAI-compatible /v1/models endpoint)
 llama_swap_url = "http://localhost:8080"
+# API key for llama-swap (Bearer token, required if auth is enabled)
+# llama_swap_api_key = "sk-..."
 # Optional custom telemetry relay URL (alternative to Beszel)
 # telemetry_url = "http://localhost:8081"
 

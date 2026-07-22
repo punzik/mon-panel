@@ -1,3 +1,4 @@
+use std::io::BufRead;
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
@@ -80,10 +81,22 @@ impl History {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ModelState {
+    #[allow(dead_code)]
+    Stopped,
+    Ready,
+}
+
 #[derive(Clone, Debug)]
 pub struct ModelInfo {
     pub name: String,
-    pub loaded: bool,
+    pub state: ModelState,
+    pub is_processing: bool,
+    pub prompt_tokens_total: u64,
+    pub tokens_predicted_total: u64,
+    pub prompt_tokens_seconds: f64,
+    pub predicted_tokens_seconds: f64,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -217,7 +230,10 @@ impl TelemetryFetcher {
     }
 
     pub fn fetch(&mut self) -> Telemetry {
-        let models = fetch_models(&self.config.llama_swap_url()).unwrap_or_default();
+        let models = fetch_models(
+            self.config.llama_swap_url(),
+            self.config.llama_swap_api_key(),
+        ).unwrap_or_default();
 
         let (system, system_name) = if let Some(beszel) = self.config.beszel.clone() {
             let sys = self.fetch_beszel(&beszel);
@@ -397,21 +413,153 @@ impl TelemetryFetcher {
     }
 }
 
-fn fetch_models(base_url: &str) -> Result<Vec<ModelInfo>, ureq::Error> {
-    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
-    let resp: ModelsResponse = ureq::get(&url)
-        .timeout(Duration::from_secs(1))
-        .call()?
-        .into_json()?;
+#[derive(Deserialize)]
+struct SseEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    data: String,
+}
 
-    Ok(resp
-        .data
+#[derive(Deserialize)]
+struct ModelStatus {
+    id: String,
+    state: String,
+}
+
+/// Fetch model list and statuses without loading any models.
+/// Uses /v1/models for the list, then /api/events (SSE) for statuses.
+fn fetch_models(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, ureq::Error> {
+    // 1. Get model list from /v1/models
+    let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let mut req = ureq::get(&url).timeout(Duration::from_secs(2));
+    if let Some(key) = api_key {
+        req = req.set("Authorization", &format!("Bearer {key}"));
+    }
+    let resp: ModelsResponse = req.call()?.into_json()?;
+
+    // 2. Get model statuses from /api/events SSE (read just the initial modelStatus)
+    let statuses = fetch_model_statuses(base_url, api_key);
+
+    // 3. Build ModelInfo — only include ready models
+    let models: Vec<ModelInfo> = resp.data
         .into_iter()
-        .map(|m| ModelInfo {
-            name: m.id,
-            loaded: true,
+        .filter_map(|m| {
+            let state = statuses
+                .get(&m.id)
+                .map(|s| s.as_str())
+                .unwrap_or("stopped");
+
+            if state == "ready" {
+                let metrics = fetch_model_metrics(base_url, &m.id, api_key);
+                Some(ModelInfo {
+                    name: m.id,
+                    state: ModelState::Ready,
+                    is_processing: metrics.4,
+                    prompt_tokens_total: metrics.0,
+                    tokens_predicted_total: metrics.1,
+                    prompt_tokens_seconds: metrics.2,
+                    predicted_tokens_seconds: metrics.3,
+                })
+            } else {
+                None
+            }
         })
-        .collect())
+        .collect();
+
+    Ok(models)
+}
+
+/// Read model statuses from /api/events SSE stream.
+/// Connects, reads until the first modelStatus event, then drops the connection.
+/// Returns a map of model_id -> state string.
+fn fetch_model_statuses(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> std::collections::HashMap<String, String> {
+    let url = format!("{}/api/events", base_url.trim_end_matches('/'));
+    let mut req = ureq::get(&url).timeout(Duration::from_secs(3));
+    if let Some(key) = api_key {
+        req = req.set("Authorization", &format!("Bearer {key}"));
+    }
+
+    let resp = match req.call() {
+        Ok(r) => r,
+        Err(_) => return std::collections::HashMap::new(),
+    };
+
+    let reader = std::io::BufReader::new(resp.into_reader());
+    let mut result = std::collections::HashMap::new();
+
+    for line in reader.lines().flatten() {
+        if !line.starts_with("data:") {
+            continue;
+        }
+        let json_str = &line[5..];
+        if let Ok(evt) = serde_json::from_str::<SseEvent>(json_str) {
+            if evt.event_type == "modelStatus" {
+                if let Ok(statuses) = serde_json::from_str::<Vec<ModelStatus>>(&evt.data) {
+                    for s in statuses {
+                        result.insert(s.id, s.state);
+                    }
+                }
+                break;  // Got what we need, drop connection
+            }
+        }
+    }
+
+    result
+}
+
+/// Fetch llama.cpp Prometheus metrics from /upstream/<model_id>/metrics.
+/// Returns (prompt_tokens_total, tokens_predicted_total, prompt_tok/s, predicted_tok/s, is_processing).
+fn fetch_model_metrics(
+    base_url: &str,
+    model_id: &str,
+    api_key: Option<&str>,
+) -> (u64, u64, f64, f64, bool) {
+    let url = format!(
+        "{}/upstream/{}/metrics",
+        base_url.trim_end_matches('/'),
+        model_id
+    );
+    let mut req = ureq::get(&url).timeout(Duration::from_secs(2));
+    if let Some(key) = api_key {
+        req = req.set("Authorization", &format!("Bearer {key}"));
+    }
+
+    let body = match req.call() {
+        Ok(r) => r.into_string().unwrap_or_default(),
+        Err(_) => return (0, 0, 0.0, 0.0, false),
+    };
+
+    let mut prompt_total = 0u64;
+    let mut predicted_total = 0u64;
+    let mut prompt_tok_s = 0.0f64;
+    let mut predicted_tok_s = 0.0f64;
+    let mut requests_processing = 0i64;
+
+    for line in body.lines() {
+        let line = line.trim();
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+        let mut parts = line.splitn(2, ' ');
+        let name = parts.next().unwrap_or("");
+        let value = parts.next().unwrap_or("");
+        match name {
+            "llamacpp:prompt_tokens_total" => prompt_total = value.parse().unwrap_or(0),
+            "llamacpp:tokens_predicted_total" => predicted_total = value.parse().unwrap_or(0),
+            "llamacpp:prompt_tokens_seconds" => prompt_tok_s = value.parse().unwrap_or(0.0),
+            "llamacpp:predicted_tokens_seconds" => predicted_tok_s = value.parse().unwrap_or(0.0),
+            "llamacpp:requests_processing" => requests_processing = value.parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+
+    (prompt_total, predicted_total, prompt_tok_s, predicted_tok_s, requests_processing > 0)
 }
 
 fn fetch_system_metrics(url: &str) -> Result<SystemMetrics, Box<dyn std::error::Error>> {

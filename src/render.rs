@@ -218,10 +218,10 @@ impl Renderer {
     }
 
     fn draw_model(&self, cr: &Context, model: &ModelInfo, y: f64) -> f64 {
-        let dot_color = if model.loaded {
-            self.config.accent_color()
-        } else {
-            self.config.dim_color()
+        let dot_color = match model.state {
+            crate::telemetry::ModelState::Ready if model.is_processing => self.config.warn_color(),
+            crate::telemetry::ModelState::Ready => self.config.accent_color(),
+            crate::telemetry::ModelState::Stopped => self.config.dim_color(),
         };
 
         // Dot
@@ -230,7 +230,31 @@ impl Renderer {
         cr.fill().expect("fill");
 
         // Name
-        self.draw_text(cr, &model.name, PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, self.config.fg_color())
+        let mut y = self.draw_text(
+            cr, &model.name,
+            PADDING + DOT_RADIUS * 2.0 + 8.0,
+            y, BODY_SIZE, false,
+            self.config.fg_color(),
+        );
+
+        // Metrics for ready models
+        if model.state == crate::telemetry::ModelState::Ready {
+            let dim = self.config.dim_color();
+            y = self.draw_text(
+                cr, &format!("Gen {:.1} tok/s", model.predicted_tokens_seconds),
+                PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, dim,
+            );
+            y = self.draw_text(
+                cr, &format!("Prm {:.1} tok/s", model.prompt_tokens_seconds),
+                PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, dim,
+            );
+            y = self.draw_text(
+                cr, &format!("In {}  Out {}", model.prompt_tokens_total, model.tokens_predicted_total),
+                PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, dim,
+            );
+        }
+
+        y
     }
 
     /// Draw a label + value on a single text line (no graph).

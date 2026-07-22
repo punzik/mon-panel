@@ -63,6 +63,8 @@ pub struct TelemetrySection {
     #[serde(default = "default_llama_url")]
     pub llama_swap_url: String,
     #[serde(default)]
+    pub llama_swap_api_key: Option<String>,
+    #[serde(default)]
     pub telemetry_url: Option<String>,
 }
 
@@ -126,6 +128,9 @@ impl Config {
     pub fn llama_swap_url(&self) -> &str {
         &self.telemetry.llama_swap_url
     }
+    pub fn llama_swap_api_key(&self) -> Option<&str> {
+        self.telemetry.llama_swap_api_key.as_deref()
+    }
     pub fn telemetry_url(&self) -> Option<&str> {
         self.telemetry.telemetry_url.as_deref()
     }
@@ -186,6 +191,7 @@ impl Default for TelemetrySection {
         Self {
             refresh_interval_ms: default_refresh_ms(),
             llama_swap_url: default_llama_url(),
+            llama_swap_api_key: None,
             telemetry_url: None,
         }
     }
