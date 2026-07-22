@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::sync::{Arc, Mutex};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 
@@ -216,23 +217,37 @@ pub struct TelemetryFetcher {
     token_time: Option<Instant>,
     system_name: Option<String>,
     system_name_time: Option<Instant>,
+    model_statuses: Arc<Mutex<std::collections::HashMap<String, String>>>,
 }
 
 impl TelemetryFetcher {
     pub fn new(config: crate::config::Config) -> Self {
+        let model_statuses = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // Spawn SSE thread for model statuses
+        let statuses_clone = model_statuses.clone();
+        let url = config.llama_swap_url().to_string();
+        let key = config.llama_swap_api_key().map(|k| k.to_string());
+        std::thread::spawn(move || {
+            sse_loop(&url, key.as_deref(), &statuses_clone);
+        });
+
         Self {
             config,
             token: None,
             token_time: None,
             system_name: None,
             system_name_time: None,
+            model_statuses,
         }
     }
 
     pub fn fetch(&mut self) -> Telemetry {
+        let statuses = self.model_statuses.lock().unwrap().clone();
         let models = fetch_models(
             self.config.llama_swap_url(),
             self.config.llama_swap_api_key(),
+            &statuses,
         ).unwrap_or_default();
 
         let (system, system_name) = if let Some(beszel) = self.config.beszel.clone() {
@@ -426,13 +441,13 @@ struct ModelStatus {
     state: String,
 }
 
-/// Fetch model list and statuses without loading any models.
-/// Uses /v1/models for the list, then /api/events (SSE) for statuses.
+/// Fetch model list. Uses cached statuses from SSE thread.
+/// Only ready models are included; metrics fetched from /upstream/<id>/metrics.
 fn fetch_models(
     base_url: &str,
     api_key: Option<&str>,
+    statuses: &std::collections::HashMap<String, String>,
 ) -> Result<Vec<ModelInfo>, ureq::Error> {
-    // 1. Get model list from /v1/models
     let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
     let mut req = ureq::get(&url).timeout(Duration::from_secs(2));
     if let Some(key) = api_key {
@@ -440,10 +455,6 @@ fn fetch_models(
     }
     let resp: ModelsResponse = req.call()?.into_json()?;
 
-    // 2. Get model statuses from /api/events SSE (read just the initial modelStatus)
-    let statuses = fetch_model_statuses(base_url, api_key);
-
-    // 3. Build ModelInfo — only include ready models
     let models: Vec<ModelInfo> = resp.data
         .into_iter()
         .filter_map(|m| {
@@ -472,45 +483,54 @@ fn fetch_models(
     Ok(models)
 }
 
-/// Read model statuses from /api/events SSE stream.
-/// Connects, reads until the first modelStatus event, then drops the connection.
-/// Returns a map of model_id -> state string.
-fn fetch_model_statuses(
+/// SSE thread loop — maintains persistent connection to /api/events.
+fn sse_loop(
     base_url: &str,
     api_key: Option<&str>,
-) -> std::collections::HashMap<String, String> {
+    statuses: &Arc<Mutex<std::collections::HashMap<String, String>>>,
+) {
     let url = format!("{}/api/events", base_url.trim_end_matches('/'));
-    let mut req = ureq::get(&url).timeout(Duration::from_secs(3));
+    loop {
+        if sse_connect(&url, api_key, statuses).is_err() {
+            eprintln!("[sse] disconnected, reconnecting in 2s...");
+            std::thread::sleep(Duration::from_secs(2));
+        }
+    }
+}
+
+/// Connect to SSE, read events and update status cache until disconnected.
+fn sse_connect(
+    url: &str,
+    api_key: Option<&str>,
+    statuses: &Arc<Mutex<std::collections::HashMap<String, String>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut req = ureq::get(url);
     if let Some(key) = api_key {
         req = req.set("Authorization", &format!("Bearer {key}"));
     }
-
-    let resp = match req.call() {
-        Ok(r) => r,
-        Err(_) => return std::collections::HashMap::new(),
-    };
-
+    let resp = req.call()?;
     let reader = std::io::BufReader::new(resp.into_reader());
-    let mut result = std::collections::HashMap::new();
 
-    for line in reader.lines().flatten() {
+    for line in reader.lines() {
+        let line = line?;
         if !line.starts_with("data:") {
             continue;
         }
         let json_str = &line[5..];
         if let Ok(evt) = serde_json::from_str::<SseEvent>(json_str) {
             if evt.event_type == "modelStatus" {
-                if let Ok(statuses) = serde_json::from_str::<Vec<ModelStatus>>(&evt.data) {
-                    for s in statuses {
-                        result.insert(s.id, s.state);
+                if let Ok(model_statuses) = serde_json::from_str::<Vec<ModelStatus>>(&evt.data) {
+                    let mut cache = statuses.lock().unwrap();
+                    cache.clear();
+                    for s in model_statuses {
+                        cache.insert(s.id, s.state);
                     }
                 }
-                break;  // Got what we need, drop connection
             }
         }
     }
 
-    result
+    Ok(())
 }
 
 /// Fetch llama.cpp Prometheus metrics from /upstream/<model_id>/metrics.
