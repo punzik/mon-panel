@@ -307,13 +307,31 @@ impl Renderer {
 
         // Sparkline — 1 pixel per sample, right-aligned
         if n >= 2 && max > 0.0 {
+            let points: Vec<(f64, f64)> = history
+                .iter()
+                .enumerate()
+                .map(|(i, &val)| {
+                    let x = PADDING + (graph_width - n as f64) + i as f64;
+                    let normalized = (val / max).clamp(0.0, 1.0);
+                    let py = y + GRAPH_HEIGHT * (1.0 - normalized);
+                    (x, py)
+                })
+                .collect();
+
+            // Filled area below the line
+            cr.set_source_rgba(color.r, color.g, color.b, color.a * 0.25);
+            cr.move_to(points[0].0, y + GRAPH_HEIGHT);
+            for &(x, py) in &points {
+                cr.line_to(x, py);
+            }
+            cr.line_to(points[n - 1].0, y + GRAPH_HEIGHT);
+            cr.close_path();
+            cr.fill().expect("fill");
+
+            // Line on top
             cr.set_source_rgba(color.r, color.g, color.b, color.a);
             cr.set_line_width(1.0);
-
-            for (i, &val) in history.iter().enumerate() {
-                let x = PADDING + (graph_width - n as f64) + i as f64;
-                let normalized = (val / max).clamp(0.0, 1.0);
-                let py = y + GRAPH_HEIGHT * (1.0 - normalized);
+            for (i, &(x, py)) in points.iter().enumerate() {
                 if i == 0 {
                     cr.move_to(x, py);
                 } else {
