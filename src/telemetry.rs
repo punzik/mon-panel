@@ -255,13 +255,12 @@ impl TelemetryFetcher {
             let name = self.fetch_system_name(&beszel);
             (sys, name)
         } else {
-            (
-                self.config
-                    .telemetry_url()
-                    .as_ref()
-                    .and_then(|url| fetch_system_metrics(url).ok()),
-                None,
-            )
+            self.config
+                .telemetry_url()
+                .as_ref()
+                .and_then(|url| fetch_system_metrics(url).ok())
+                .map(|(m, n)| (Some(m), Some(n)))
+                .unwrap_or((None, None))
         };
 
         Telemetry {
@@ -582,10 +581,138 @@ fn fetch_model_metrics(
     (prompt_total, predicted_total, prompt_tok_s, predicted_tok_s, requests_processing > 0)
 }
 
-fn fetch_system_metrics(url: &str) -> Result<SystemMetrics, Box<dyn std::error::Error>> {
-    let endpoint = format!("{}/metrics", url.trim_end_matches('/'));
-    Ok(ureq::get(&endpoint)
-        .timeout(Duration::from_secs(1))
+// --- sysinfo-crawler /api/metrics response types ---
+
+#[derive(Deserialize)]
+struct SysinfoResponse {
+    system: SysinfoSystem,
+    cpu: SysinfoCpu,
+    memory: SysinfoMemory,
+    #[serde(default)]
+    disks: Vec<SysinfoDisk>,
+    #[serde(default)]
+    temperatures: Vec<SysinfoTemp>,
+    #[serde(default)]
+    gpus: Vec<SysinfoGpu>,
+}
+
+#[derive(Deserialize)]
+struct SysinfoSystem {
+    hostname: String,
+    #[serde(default)]
+    uptime_seconds: u64,
+}
+
+#[derive(Deserialize)]
+struct SysinfoCpu {
+    overall_usage: f32,
+    #[serde(default)]
+    load_avg: Option<SysinfoLoadAvg>,
+}
+
+#[derive(Deserialize)]
+struct SysinfoLoadAvg {
+    one: f64,
+}
+
+#[derive(Deserialize)]
+struct SysinfoMemory {
+    ram: SysinfoMem,
+    swap: SysinfoMem,
+}
+
+#[derive(Deserialize)]
+struct SysinfoMem {
+    used_bytes: u64,
+    total_bytes: u64,
+    used_percent: f64,
+}
+
+#[derive(Deserialize)]
+struct SysinfoDisk {
+    mountpoint: String,
+    used_percent: f64,
+}
+
+#[derive(Deserialize)]
+struct SysinfoTemp {
+    chip: String,
+    label: String,
+    temp_c: f64,
+}
+
+#[derive(Deserialize)]
+struct SysinfoGpu {
+    #[allow(dead_code)]
+    index: u32,
+    name: String,
+    utilization_gpu: f64,
+    memory_used_mib: f64,
+    memory_total_mib: f64,
+    temperature_gpu: f64,
+}
+
+/// Fetch system metrics from sysinfo-crawler `/api/metrics`.
+/// Returns (SystemMetrics, hostname).
+fn fetch_system_metrics(
+    url: &str,
+) -> Result<(SystemMetrics, String), Box<dyn std::error::Error>> {
+    let endpoint = format!("{}/api/metrics", url.trim_end_matches('/'));
+    let resp: SysinfoResponse = ureq::get(&endpoint)
+        .timeout(Duration::from_secs(2))
         .call()?
-        .into_json::<SystemMetrics>()?)
+        .into_json()?;
+
+    // CPU temp: prefer coretemp "Core 0", then "Package id 0", then any coretemp Core
+    let cpu_temp = resp
+        .temperatures
+        .iter()
+        .find(|t| t.chip == "coretemp" && t.label == "Core 0")
+        .or_else(|| {
+            resp.temperatures
+                .iter()
+                .find(|t| t.chip == "coretemp" && t.label == "Package id 0")
+        })
+        .or_else(|| {
+            resp.temperatures
+                .iter()
+                .find(|t| t.chip == "coretemp" && t.label.starts_with("Core"))
+        })
+        .map(|t| t.temp_c as f32)
+        .unwrap_or(0.0);
+
+    // Disk: prefer root mountpoint, fall back to first disk
+    let disk_pct = resp
+        .disks
+        .iter()
+        .find(|d| d.mountpoint == "/")
+        .or_else(|| resp.disks.first())
+        .map(|d| d.used_percent)
+        .unwrap_or(0.0);
+
+    let gpus = resp
+        .gpus
+        .iter()
+        .map(|g| GpuInfo {
+            name: g.name.clone(),
+            percent: g.utilization_gpu as f32,
+            memory_used_gb: g.memory_used_mib / 1024.0,
+            memory_total_gb: g.memory_total_mib / 1024.0,
+            temp_c: g.temperature_gpu as f32,
+        })
+        .collect();
+
+    let metrics = SystemMetrics {
+        cpu_percent: resp.cpu.overall_usage,
+        cpu_temp_c: cpu_temp,
+        memory_used_gb: resp.memory.ram.used_bytes as f64 / 1e9,
+        memory_total_gb: resp.memory.ram.total_bytes as f64 / 1e9,
+        gpus,
+        disk_pct,
+        swap_pct: resp.memory.swap.used_percent,
+        load_avg: resp.cpu.load_avg.as_ref().map(|la| la.one).unwrap_or(0.0),
+        uptime_secs: resp.system.uptime_seconds,
+    };
+
+    Ok((metrics, resp.system.hostname))
 }
