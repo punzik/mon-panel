@@ -16,6 +16,19 @@ const SECTION_GAP: f64 = 14.0;
 const DOT_RADIUS: f64 = 4.0;
 const PANGO_SCALE: i32 = 1024;
 
+/// Format large counts with k/M/B suffixes.
+fn fmt_count(n: u64) -> String {
+    if n >= 10_000_000_000 {
+        format!("{:.0}B", n as f64 / 1_000_000_000.0)
+    } else if n >= 10_000_000 {
+        format!("{:.0}M", n as f64 / 1_000_000.0)
+    } else if n >= 10_000 {
+        format!("{:.0}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
 pub struct Renderer {
     width: i32,
     height: i32,
@@ -249,7 +262,7 @@ impl Renderer {
                 PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, dim,
             );
             y = self.draw_text(
-                cr, &format!("In {}  Out {}", model.prompt_tokens_total, model.tokens_predicted_total),
+                cr, &format!("In {}  Out {}", fmt_count(model.prompt_tokens_total), fmt_count(model.tokens_predicted_total)),
                 PADDING + DOT_RADIUS * 2.0 + 8.0, y, BODY_SIZE, false, dim,
             );
         }
