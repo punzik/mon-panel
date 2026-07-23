@@ -40,7 +40,14 @@ impl History {
         }
     }
 
-    pub fn push(&mut self, sys: &SystemMetrics) {
+    /// Push the **maximum** value of each metric across `samples` as a single
+    /// data point.  Used when the graph update interval > 1: we collect several
+    /// telemetry samples and only store the peak, so the sparkline shows the
+    /// worst-case value in each window.
+    pub fn push_max(&mut self, samples: &[SystemMetrics]) {
+        if samples.is_empty() {
+            return;
+        }
         let cap = self.capacity;
         let push = |v: &mut Vec<f64>, val: f64| {
             if v.len() == cap {
@@ -49,19 +56,37 @@ impl History {
             v.push(val);
         };
 
-        push(&mut self.cpu, sys.cpu_percent as f64);
-        push(&mut self.cpu_temp, sys.cpu_temp_c as f64);
+        let cpu_max = samples
+            .iter()
+            .map(|s| s.cpu_percent as f64)
+            .fold(0.0_f64, f64::max);
+        push(&mut self.cpu, cpu_max);
 
-        let ram_pct = if sys.memory_total_gb > 0.0 {
-            sys.memory_used_gb / sys.memory_total_gb * 100.0
-        } else {
-            0.0
-        };
-        push(&mut self.ram, ram_pct);
+        let cpu_temp_max = samples
+            .iter()
+            .map(|s| s.cpu_temp_c as f64)
+            .fold(0.0_f64, f64::max);
+        push(&mut self.cpu_temp, cpu_temp_max);
+
+        let ram_max = samples
+            .iter()
+            .map(|s| {
+                if s.memory_total_gb > 0.0 {
+                    s.memory_used_gb / s.memory_total_gb * 100.0
+                } else {
+                    0.0
+                }
+            })
+            .fold(0.0_f64, f64::max);
+        push(&mut self.ram, ram_max);
 
         // Resize gpu history if GPU count changed
-        if self.gpus.len() != sys.gpus.len() {
-            self.gpus = (0..sys.gpus.len())
+        let max_gpus = samples.iter().map(|s| s.gpus.len()).max().unwrap_or(0);
+        if max_gpus == 0 {
+            return;
+        }
+        if self.gpus.len() != max_gpus {
+            self.gpus = (0..max_gpus)
                 .map(|_| GpuHistory {
                     util: Vec::with_capacity(cap),
                     vram: Vec::with_capacity(cap),
@@ -70,15 +95,33 @@ impl History {
                 .collect();
         }
 
-        for (i, gpu) in sys.gpus.iter().enumerate() {
-            push(&mut self.gpus[i].util, gpu.percent as f64);
-            let vram_pct = if gpu.memory_total_gb > 0.0 {
-                gpu.memory_used_gb / gpu.memory_total_gb * 100.0
-            } else {
-                0.0
-            };
-            push(&mut self.gpus[i].vram, vram_pct);
-            push(&mut self.gpus[i].temp, gpu.temp_c as f64);
+        for i in 0..max_gpus {
+            let util_max = samples
+                .iter()
+                .filter_map(|s| s.gpus.get(i))
+                .map(|g| g.percent as f64)
+                .fold(0.0_f64, f64::max);
+            push(&mut self.gpus[i].util, util_max);
+
+            let vram_max = samples
+                .iter()
+                .filter_map(|s| s.gpus.get(i))
+                .map(|g| {
+                    if g.memory_total_gb > 0.0 {
+                        g.memory_used_gb / g.memory_total_gb * 100.0
+                    } else {
+                        0.0
+                    }
+                })
+                .fold(0.0_f64, f64::max);
+            push(&mut self.gpus[i].vram, vram_max);
+
+            let temp_max = samples
+                .iter()
+                .filter_map(|s| s.gpus.get(i))
+                .map(|g| g.temp_c as f64)
+                .fold(0.0_f64, f64::max);
+            push(&mut self.gpus[i].temp, temp_max);
         }
     }
 }
@@ -789,10 +832,84 @@ fn fetch_system_metrics(url: &str) -> Result<(SystemMetrics, String), Box<dyn st
 
 #[cfg(test)]
 mod tests {
-    use super::encode_path_segment;
+    use super::*;
 
     #[test]
     fn encodes_model_id_as_one_url_path_segment() {
         assert_eq!(encode_path_segment("model/a b"), "model%2Fa%20b");
+    }
+
+    #[test]
+    fn push_max_stores_peak_of_each_metric() {
+        let mut h = History::new(10);
+
+        let s1 = SystemMetrics {
+            cpu_percent: 30.0,
+            cpu_temp_c: 50.0,
+            memory_used_gb: 4.0,
+            memory_total_gb: 16.0,
+            gpus: vec![GpuInfo {
+                name: "GPU0".into(),
+                percent: 40.0,
+                memory_used_gb: 2.0,
+                memory_total_gb: 8.0,
+                temp_c: 60.0,
+            }],
+            ..Default::default()
+        };
+        let s2 = SystemMetrics {
+            cpu_percent: 80.0,
+            cpu_temp_c: 75.0,
+            memory_used_gb: 10.0,
+            memory_total_gb: 16.0,
+            gpus: vec![GpuInfo {
+                name: "GPU0".into(),
+                percent: 95.0,
+                memory_used_gb: 6.0,
+                memory_total_gb: 8.0,
+                temp_c: 78.0,
+            }],
+            ..Default::default()
+        };
+        let s3 = SystemMetrics {
+            cpu_percent: 50.0,
+            cpu_temp_c: 65.0,
+            memory_used_gb: 8.0,
+            memory_total_gb: 16.0,
+            gpus: vec![GpuInfo {
+                name: "GPU0".into(),
+                percent: 70.0,
+                memory_used_gb: 5.0,
+                memory_total_gb: 8.0,
+                temp_c: 70.0,
+            }],
+            ..Default::default()
+        };
+
+        h.push_max(&[s1, s2, s3]);
+
+        assert_eq!(h.cpu, vec![80.0]);       // max(30, 80, 50)
+        assert_eq!(h.cpu_temp, vec![75.0]);    // max(50, 75, 65)
+        assert_eq!(h.ram, vec![62.5]);       // max(25, 62.5, 50)%
+        assert_eq!(h.gpus[0].util, vec![95.0]);  // max(40, 95, 70)
+        assert_eq!(h.gpus[0].vram, vec![75.0]); // max(25, 75, 62.5)%
+        assert_eq!(h.gpus[0].temp, vec![78.0]);  // max(60, 78, 70)
+    }
+
+    #[test]
+    fn push_max_with_empty_samples_is_noop() {
+        let mut h = History::new(10);
+        h.push_max(&[]);
+        assert!(h.cpu.is_empty());
+    }
+
+    #[test]
+    fn push_max_respects_capacity() {
+        let mut h = History::new(2);
+        h.push_max(&[SystemMetrics { cpu_percent: 10.0, ..Default::default() }]);
+        h.push_max(&[SystemMetrics { cpu_percent: 20.0, ..Default::default() }]);
+        h.push_max(&[SystemMetrics { cpu_percent: 30.0, ..Default::default() }]);
+        // capacity = 2, oldest point (10.0) should be evicted
+        assert_eq!(h.cpu, vec![20.0, 30.0]);
     }
 }

@@ -55,6 +55,10 @@ pub struct PanelSection {
 pub struct TelemetrySection {
     #[serde(default = "default_refresh_ms")]
     pub refresh_interval_ms: u64,
+    /// How many telemetry refreshes elapse before a new data point is added to
+    /// the graphs. 1 = update graphs on every telemetry refresh (default).
+    #[serde(default = "default_graph_update_interval")]
+    pub graph_update_interval: u32,
     #[serde(default = "default_llama_url")]
     pub llama_swap_url: String,
     #[serde(default)]
@@ -146,6 +150,9 @@ impl Config {
     pub fn refresh_interval_ms(&self) -> u64 {
         self.telemetry.refresh_interval_ms
     }
+    pub fn graph_update_interval(&self) -> u32 {
+        self.telemetry.graph_update_interval
+    }
     pub fn llama_swap_url(&self) -> &str {
         &self.telemetry.llama_swap_url
     }
@@ -171,6 +178,9 @@ impl Config {
         }
         if self.telemetry.refresh_interval_ms == 0 {
             return Err("telemetry.refresh_interval_ms must be greater than zero".to_string());
+        }
+        if self.telemetry.graph_update_interval == 0 {
+            return Err("telemetry.graph_update_interval must be at least 1".to_string());
         }
         if !self.display.font_size.is_finite() || self.display.font_size <= 0.0 {
             return Err("display.font_size must be a positive finite number".to_string());
@@ -300,6 +310,9 @@ fn default_llama_url() -> String {
 fn default_refresh_ms() -> u64 {
     10000
 }
+fn default_graph_update_interval() -> u32 {
+    1
+}
 fn default_font() -> String {
     "Sans".to_string()
 }
@@ -342,6 +355,7 @@ impl Default for TelemetrySection {
     fn default() -> Self {
         Self {
             refresh_interval_ms: default_refresh_ms(),
+            graph_update_interval: default_graph_update_interval(),
             llama_swap_url: default_llama_url(),
             llama_swap_api_key: None,
             telemetry_url: None,
@@ -427,6 +441,13 @@ mod tests {
     #[test]
     fn defaults_are_valid() {
         assert!(Config::default().validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_zero_graph_update_interval() {
+        let mut config = Config::default();
+        config.telemetry.graph_update_interval = 0;
+        assert!(config.validate().is_err());
     }
 
     #[test]

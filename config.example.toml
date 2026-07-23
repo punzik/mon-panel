@@ -19,6 +19,13 @@ trigger_width = 3
 [telemetry]
 # How often to poll for metrics and record history, in milliseconds
 refresh_interval_ms = 10000
+# How many telemetry refreshes elapse before a new data point is added
+# to the graphs (integer >= 1). The graph will show the maximum value of
+# each metric over that many refreshes.
+# Example: refresh_interval_ms = 10000, graph_update_interval = 6
+#   → telemetry updates every 10 s, graph gets a new point every 60 s.
+# Default: 1 (update graph on every telemetry refresh).
+graph_update_interval = 1
 # URL of llama-swap (OpenAI-compatible /v1/models endpoint)
 llama_swap_url = "http://localhost:8080"
 # API key for llama-swap (Bearer token, required if auth is enabled)

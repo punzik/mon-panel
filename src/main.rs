@@ -11,7 +11,7 @@ use x11rb::protocol::xproto::{ButtonPressEvent, EnterNotifyEvent, LeaveNotifyEve
 use x11rb::protocol::Event;
 
 use animation::SlideAnimation;
-use telemetry::{History, Telemetry};
+use telemetry::{History, SystemMetrics, Telemetry};
 
 const SCROLL_STEP: i32 = 48;
 
@@ -44,6 +44,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // History has one sample per pixel of graph width.
     let graph_capacity = (config.panel_width() as usize).saturating_sub(32).max(1);
+    let graph_update_interval = config.graph_update_interval() as usize;
+    let mut telemetry_buffer: Vec<SystemMetrics> = Vec::with_capacity(graph_update_interval);
     let mut history = History::new(graph_capacity);
 
     let (tx, rx) = mpsc::channel::<Telemetry>();
@@ -162,7 +164,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if let Ok(new_telemetry) = rx.try_recv() {
             if let Some(system) = &new_telemetry.system {
-                history.push(system);
+                telemetry_buffer.push(system.clone());
+                if telemetry_buffer.len() >= graph_update_interval {
+                    history.push_max(&telemetry_buffer);
+                    telemetry_buffer.clear();
+                }
             }
             telemetry = new_telemetry;
             if state != PanelState::Hidden {

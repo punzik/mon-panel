@@ -21,6 +21,10 @@ trigger_width = 3
 
 [telemetry]
 refresh_interval_ms = 10000
+# Graph update interval: number of telemetry refreshes per graph data point
+# (integer >= 1). The graph shows the max value of each metric over that
+# many refreshes. Default: 1.
+graph_update_interval = 1
 llama_swap_url = "http://localhost:8080"
 # llama_swap_api_key = "sk-..."
 # Alternative to Beszel: sysmetrics (https://github.com/punzik/sysmetrics)
