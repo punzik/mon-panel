@@ -86,16 +86,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if win == panel.trigger_win =>
                 {
                     trigger_hovered = true;
-                    if matches!(state, PanelState::Hidden | PanelState::SlidingOut) {
-                        state = PanelState::SlidingIn;
-                        animation = Some(SlideAnimation::new(
-                            panel_x as f64,
-                            panel.visible_x as f64,
-                            config.animation_duration_ms(),
-                        ));
-                        panel.raise_panel()?;
-                        needs_redraw = true;
-                    }
                 }
                 Event::LeaveNotify(LeaveNotifyEvent { event: win, .. })
                     if win == panel.trigger_win =>
@@ -131,6 +121,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 _ => {}
             }
+        }
+
+        // When mon-panel starts before i3, i3 may later map client windows
+        // above the input-only trigger. Polling the root pointer keeps edge
+        // activation working even when that trigger cannot receive EnterNotify.
+        if matches!(state, PanelState::Hidden | PanelState::SlidingOut) {
+            trigger_hovered = panel.pointer_over_trigger()?;
+        }
+        if trigger_hovered && matches!(state, PanelState::Hidden | PanelState::SlidingOut) {
+            state = PanelState::SlidingIn;
+            animation = Some(SlideAnimation::new(
+                panel_x as f64,
+                panel.visible_x as f64,
+                config.animation_duration_ms(),
+            ));
+            panel.raise_panel()?;
+            needs_redraw = true;
         }
 
         if let Some(anim) = &animation {

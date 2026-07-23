@@ -12,8 +12,11 @@ pub struct PanelWindow {
     pub screen_width: u16,
     #[allow(dead_code)]
     pub screen_height: u16,
+    root: u32,
     pub panel_win: u32,
     pub trigger_win: u32,
+    trigger_x: i32,
+    trigger_width: u16,
     pub gc: u32,
     pub depth: u8,
     pub panel_width: u16,
@@ -27,6 +30,7 @@ impl PanelWindow {
     pub fn create(config: &Config) -> Result<Self, Box<dyn std::error::Error>> {
         let (conn, screen_num) = x11rb::connect(None)?;
         let screen = &conn.setup().roots[screen_num];
+        let root = screen.root;
         let screen_width = screen.width_in_pixels;
         let screen_height = screen.height_in_pixels;
         let panel_width = config.panel_width();
@@ -131,8 +135,11 @@ impl PanelWindow {
             conn,
             screen_width,
             screen_height,
+            root,
             panel_win,
             trigger_win,
+            trigger_x,
+            trigger_width,
             gc,
             depth,
             panel_width,
@@ -173,6 +180,16 @@ impl PanelWindow {
         )?;
         self.conn.flush()?;
         Ok(())
+    }
+
+    /// Check the pointer position directly as a fallback for the input-only
+    /// trigger being obscured by windows mapped by a late-starting WM.
+    pub fn pointer_over_trigger(&self) -> Result<bool, Box<dyn std::error::Error>> {
+        let pointer = self.conn.query_pointer(self.root)?.reply()?;
+        let x = i32::from(pointer.root_x);
+        Ok(pointer.same_screen
+            && x >= self.trigger_x
+            && x < self.trigger_x + i32::from(self.trigger_width))
     }
 
     /// Poll for next event without blocking.
