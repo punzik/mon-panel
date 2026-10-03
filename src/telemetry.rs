@@ -262,6 +262,9 @@ pub struct TelemetryFetcher {
     system_name: Option<String>,
     system_name_time: Option<Instant>,
     model_statuses: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    /// Last non-zero tok/s per model (prompt, predicted), kept so the panel
+    /// shows the most recent real speed instead of 0.0 between requests.
+    last_speeds: std::collections::HashMap<String, (f64, f64)>,
 }
 
 impl TelemetryFetcher {
@@ -283,6 +286,7 @@ impl TelemetryFetcher {
             system_name: None,
             system_name_time: None,
             model_statuses,
+            last_speeds: std::collections::HashMap::new(),
         }
     }
 
@@ -294,12 +298,16 @@ impl TelemetryFetcher {
                 poisoned.into_inner().clone()
             }
         };
-        let models = fetch_models(
+        let mut models = fetch_models(
             self.config.llama_swap_url(),
             self.config.llama_swap_api_key(),
             &statuses,
         )
         .unwrap_or_default();
+
+        for model in models.iter_mut() {
+            update_last_speeds(&mut self.last_speeds, model);
+        }
 
         let (system, system_name) = if let Some(beszel) = self.config.beszel.clone() {
             let sys = self.fetch_beszel(&beszel);
@@ -563,6 +571,26 @@ fn fetch_models(
     });
 
     Ok(models)
+}
+
+/// Replace zero speeds with the last valid ones and record fresh non-zero
+/// values. Speed metrics report 0.0 while the model is idle, so a zero is
+/// treated as "no data", not as a real reading.
+fn update_last_speeds(
+    cache: &mut std::collections::HashMap<String, (f64, f64)>,
+    model: &mut ModelInfo,
+) {
+    let entry = cache.entry(model.name.clone()).or_default();
+    for (current, last) in [
+        (&mut model.prompt_tokens_seconds, &mut entry.0),
+        (&mut model.predicted_tokens_seconds, &mut entry.1),
+    ] {
+        if *current > 0.0 {
+            *last = *current;
+        } else {
+            *current = *last;
+        }
+    }
 }
 
 /// SSE thread loop — maintains persistent connection to /api/events.
@@ -894,6 +922,83 @@ mod tests {
         assert_eq!(h.gpus[0].util, vec![95.0]);  // max(40, 95, 70)
         assert_eq!(h.gpus[0].vram, vec![75.0]); // max(25, 75, 62.5)%
         assert_eq!(h.gpus[0].temp, vec![78.0]);  // max(60, 78, 70)
+    }
+
+    #[test]
+    fn update_last_speeds_keeps_last_valid_value() {
+        let mut cache = std::collections::HashMap::new();
+
+        // Active generation: speeds are recorded.
+        let mut busy = ModelInfo {
+            name: "m1".into(),
+            state: ModelState::Ready,
+            is_processing: true,
+            prompt_tokens_total: 100,
+            tokens_predicted_total: 50,
+            prompt_tokens_seconds: 120.0,
+            predicted_tokens_seconds: 42.5,
+        };
+        update_last_speeds(&mut cache, &mut busy);
+        assert_eq!(busy.prompt_tokens_seconds, 120.0);
+        assert_eq!(busy.predicted_tokens_seconds, 42.5);
+
+        // Idle: zeros are replaced by the last valid values.
+        let mut idle = ModelInfo {
+            name: "m1".into(),
+            prompt_tokens_seconds: 0.0,
+            predicted_tokens_seconds: 0.0,
+            ..busy.clone()
+        };
+        update_last_speeds(&mut cache, &mut idle);
+        assert_eq!(idle.prompt_tokens_seconds, 120.0);
+        assert_eq!(idle.predicted_tokens_seconds, 42.5);
+
+        // A new active reading replaces the stored one.
+        let mut faster = ModelInfo {
+            name: "m1".into(),
+            prompt_tokens_seconds: 300.0,
+            predicted_tokens_seconds: 99.0,
+            ..busy.clone()
+        };
+        update_last_speeds(&mut cache, &mut faster);
+        let mut idle2 = ModelInfo {
+            name: "m1".into(),
+            prompt_tokens_seconds: 0.0,
+            predicted_tokens_seconds: 0.0,
+            ..busy.clone()
+        };
+        update_last_speeds(&mut cache, &mut idle2);
+        assert_eq!(idle2.prompt_tokens_seconds, 300.0);
+        assert_eq!(idle2.predicted_tokens_seconds, 99.0);
+
+        // Only one metric may go to zero while the other keeps updating.
+        let mut prefill_only = ModelInfo {
+            name: "m1".into(),
+            prompt_tokens_seconds: 150.0,
+            predicted_tokens_seconds: 0.0,
+            ..busy.clone()
+        };
+        update_last_speeds(&mut cache, &mut prefill_only);
+        assert_eq!(prefill_only.predicted_tokens_seconds, 99.0); // kept
+        let mut generation_only = ModelInfo {
+            name: "m1".into(),
+            prompt_tokens_seconds: 0.0,
+            predicted_tokens_seconds: 33.0,
+            ..busy.clone()
+        };
+        update_last_speeds(&mut cache, &mut generation_only);
+        assert_eq!(generation_only.prompt_tokens_seconds, 150.0); // kept
+
+        // Unknown model with no history keeps 0.0.
+        let mut fresh = ModelInfo {
+            name: "m2".into(),
+            prompt_tokens_seconds: 0.0,
+            predicted_tokens_seconds: 0.0,
+            ..busy.clone()
+        };
+        update_last_speeds(&mut cache, &mut fresh);
+        assert_eq!(fresh.prompt_tokens_seconds, 0.0);
+        assert_eq!(fresh.predicted_tokens_seconds, 0.0);
     }
 
     #[test]
